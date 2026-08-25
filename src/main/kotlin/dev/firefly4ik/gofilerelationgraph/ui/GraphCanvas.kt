@@ -64,7 +64,7 @@ class GraphCanvas(
     private var hoveredEdgeKey: Pair<String, String>? = null
     private var hasDragged = false
     private var pendingInitialFit = false
-    private var popupHandled = false
+    private var popupGestureStarted = false
     private var pendingWheelZoomFactor = 1.0
     private var pendingWheelZoomAnchor = Point()
     private var touchpadWheelSuppressedUntil = 0L
@@ -97,13 +97,13 @@ class GraphCanvas(
                 lastMousePoint = event.point
                 dragStart = event.point
                 hasDragged = false
-                popupHandled = false
+                popupGestureStarted = false
                 pressedCallable = callableAt(event.point)
 
                 if (event.isPopupTrigger || event.button == MouseEvent.BUTTON3) {
-                    pressedCallable?.takeIf(CallableRelation::isInterfaceDispatch)?.let(navigator::openParentInterface)
-                    popupHandled = true
-                    pressedCallable = null
+                    // Open only after mouseReleased. Otherwise the release returns focus to the graph
+                    // while the editor is being selected and GoLand rejects the focus transfer.
+                    popupGestureStarted = true
                     return
                 }
 
@@ -141,8 +141,11 @@ class GraphCanvas(
             }
 
             override fun mouseReleased(event: MouseEvent) {
-                if (!popupHandled && (event.isPopupTrigger || event.button == MouseEvent.BUTTON3)) {
-                    callableAt(event.point)?.takeIf(CallableRelation::isInterfaceDispatch)?.let(navigator::openParentInterface)
+                if (popupGestureStarted || event.isPopupTrigger || event.button == MouseEvent.BUTTON3) {
+                    (pressedCallable ?: callableAt(event.point))
+                        ?.takeIf(CallableRelation::isInterfaceDispatch)
+                        ?.let(navigator::openParentInterface)
+                    event.consume()
                 } else if (!hasDragged) {
                     val callable = pressedCallable ?: callableAt(event.point)
                     when {
@@ -156,7 +159,7 @@ class GraphCanvas(
                 dragStart = null
                 lastMousePoint = null
                 cursor = Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
-                popupHandled = false
+                popupGestureStarted = false
             }
 
             override fun mouseMoved(event: MouseEvent) {
