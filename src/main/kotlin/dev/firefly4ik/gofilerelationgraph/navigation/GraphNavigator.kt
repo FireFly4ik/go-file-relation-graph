@@ -6,6 +6,9 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPsiElementPointer
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
@@ -21,24 +24,24 @@ import javax.swing.ListCellRenderer
 class GraphNavigator(
     private val project: Project,
 ) {
-    fun openFile(file: com.intellij.openapi.vfs.VirtualFile) {
+    fun openFile(file: VirtualFile) {
         openInCurrentEditor(file, 0)
     }
 
     fun openTarget(callable: CallableRelation) {
-        navigateTo(callable.target.element)
+        navigateTo(callable.target)
     }
 
     fun openParentInterface(callable: CallableRelation) {
-        navigateTo(callable.parentInterface?.element)
+        navigateTo(callable.parentInterface)
     }
 
     fun openCallSites(callable: CallableRelation, component: JComponent, point: Point) {
-        val validSites = callable.callSites.filter { it.pointer.element?.isValid == true }
+        val validSites = ApplicationManager.getApplication().runReadAction<List<CallSite>> {
+            callable.callSites.filter { it.pointer.element?.isValid == true }
+        }
         if (validSites.size == 1) {
-            // Keep this identical to the popup selection path. Deferring it with invokeLater can lose
-            // the current editor context when the graph lives in a detached tool window.
-            navigateTo(validSites.single().pointer.element)
+            navigateTo(validSites.single().pointer)
             return
         }
         if (validSites.isEmpty()) return
@@ -61,18 +64,22 @@ class GraphNavigator(
                     }, BorderLayout.EAST)
                 }
             })
-            .setItemChosenCallback { navigateTo(it.pointer.element) }
+            .setItemChosenCallback { navigateTo(it.pointer) }
             .createPopup()
             .show(com.intellij.ui.awt.RelativePoint(component, point))
     }
 
-    private fun navigateTo(element: com.intellij.psi.PsiElement?) {
-        if (element == null || !element.isValid) return
-        val file = element.containingFile?.virtualFile ?: return
-        openInCurrentEditor(file, element.textOffset)
+    private fun navigateTo(pointer: SmartPsiElementPointer<out PsiElement>?) {
+        val location = ApplicationManager.getApplication().runReadAction<Pair<VirtualFile, Int>?> {
+            val element = pointer?.element
+            if (element == null || !element.isValid) return@runReadAction null
+            val file = element.containingFile?.virtualFile ?: return@runReadAction null
+            file to element.textOffset
+        } ?: return
+        openInCurrentEditor(location.first, location.second)
     }
 
-    private fun openInCurrentEditor(file: com.intellij.openapi.vfs.VirtualFile, offset: Int) {
+    private fun openInCurrentEditor(file: VirtualFile, offset: Int) {
         // FileEditorManager derives its open mode from the current AWT event. Calling it directly
         // from Shift+mouseReleased is interpreted by the platform as "open in a new window".
         ApplicationManager.getApplication().invokeLater {
