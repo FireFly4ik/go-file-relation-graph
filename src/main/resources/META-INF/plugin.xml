@@ -1,0 +1,23 @@
+<idea-plugin>
+    <id>dev.firefly4ik.go-file-relation-graph</id>
+    <name>Go File Relation Graph</name>
+    <vendor>firefly4ik</vendor>
+
+    <description><![CDATA[
+        Visualizes calls and interface implementations between Go files currently open in the editor.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.go</depends>
+    <depends>com.intellij.modules.goland</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="Go File Relation Graph"
+            anchor="bottom"
+            secondary="true"
+            icon="/icons/toolWindow.svg"
+            factoryClass="dev.firefly4ik.gofilerelationgraph.ui.GoFileRelationGraphToolWindowFactory"/>
+    </extensions>
+</idea-plugin>
+
