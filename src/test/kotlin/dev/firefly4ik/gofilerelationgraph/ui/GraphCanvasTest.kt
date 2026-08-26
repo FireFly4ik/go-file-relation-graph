@@ -17,6 +17,25 @@ import javax.swing.Timer
 import javax.swing.UIManager
 
 class GraphCanvasTest : BasePlatformTestCase() {
+    fun testLimitPlaceholderEdgeWithoutCallablesPaints() {
+        val target = myFixture.addFileToProject("target.go", "package main\n\nfunc target() {}")
+        val canvas = GraphCanvas(GraphNavigator(project)).apply {
+            font = UIManager.getFont("Label.font")
+            setSize(900, 600)
+            setSnapshot(
+                GraphSnapshot(
+                    nodes = listOf(
+                        FileNode("limit", "More parents not shown", target.virtualFile, false, isPlaceholder = true),
+                        FileNode("target", "target.go", target.virtualFile, true),
+                    ),
+                    edges = listOf(FileEdge("limit", "target", emptyList())),
+                ),
+            )
+        }
+
+        canvas.paint(BufferedImage(900, 600, BufferedImage.TYPE_INT_ARGB).graphics)
+    }
+
     fun testRightClickNavigatesAfterMouseRelease() {
         val source = myFixture.addFileToProject("source.go", "package main\n\nfunc source() {}")
         val interfaceFile = myFixture.addFileToProject(

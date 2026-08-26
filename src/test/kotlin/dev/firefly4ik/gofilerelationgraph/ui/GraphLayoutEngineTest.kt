@@ -127,6 +127,46 @@ class GraphLayoutEngineTest {
     }
 
     @Test
+    fun `explicit breadth first levels keep all direct parents on one row`() {
+        val nodes = listOf(
+            FileNode("root.go", "root.go", LightVirtualFile("root.go"), false, layoutLevel = 2),
+            FileNode("first.go", "first.go", LightVirtualFile("first.go"), false, layoutLevel = 1),
+            FileNode("second.go", "second.go", LightVirtualFile("second.go"), false, layoutLevel = 1),
+            FileNode("deep.go", "deep.go", LightVirtualFile("deep.go"), false, layoutLevel = 0),
+        )
+        val snapshot = GraphSnapshot(
+            nodes = nodes,
+            edges = listOf(
+                FileEdge("first.go", "root.go", emptyList()),
+                FileEdge("second.go", "root.go", emptyList()),
+                FileEdge("deep.go", "first.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+
+        assertEquals(positions.getValue("first.go").y, positions.getValue("second.go").y)
+        assertTrue(positions.getValue("deep.go").y < positions.getValue("first.go").y)
+        assertTrue(positions.getValue("first.go").y < positions.getValue("root.go").y)
+    }
+
+    @Test
+    fun `large breadth first graph uses bounded layout optimization`() {
+        val parentIds = (1..60).map { index -> "parent-$index.go" }
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 1),
+            ) + parentIds.map { id -> FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 0) },
+            edges = parentIds.map { id -> FileEdge(id, "target.go", emptyList()) },
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+
+        assertEquals(61, positions.size)
+        assertEquals(1, parentIds.map { id -> positions.getValue(id).y }.distinct().size)
+    }
+
+    @Test
     fun `independent branches with different depth stay visually separated`() {
         val ids = listOf("apply.go", "handler.go", "promocode.go", "pricing.go", "deep.go")
         val snapshot = GraphSnapshot(

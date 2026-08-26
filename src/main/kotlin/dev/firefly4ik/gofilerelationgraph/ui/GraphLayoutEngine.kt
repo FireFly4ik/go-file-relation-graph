@@ -128,7 +128,7 @@ object GraphLayoutEngine {
                 incoming.getValue(edge.targetId) += edge.sourceId
             }
             weights[edge.sourceId to edge.targetId] = edge.callables.sumOf { callable ->
-                if (callable.isInterfaceDispatch) 1 else 4
+                if (callable.isInterfaceDispatch || callable.isCallbackArgument) 1 else 4
             }.coerceAtLeast(1)
         }
 
@@ -174,22 +174,31 @@ object GraphLayoutEngine {
             incoming.getValue(id).filter { parent -> orderIndex.getValue(parent) < orderIndex.getValue(id) }
         }
 
-        val levels = nodeIds.associateWith { 0 }.toMutableMap()
-        for (source in ordered) {
-            for (target in forwardOutgoing.getValue(source)) {
-                levels[target] = maxOf(levels.getValue(target), levels.getValue(source) + 1)
+        val explicitLevels = snapshot.nodes
+            .mapNotNull { node -> node.layoutLevel?.let { level -> node.id to level } }
+            .toMap()
+            .takeIf { levelsById -> levelsById.size == nodeIds.size }
+        val levels = if (explicitLevels != null) {
+            explicitLevels.toMutableMap()
+        } else {
+            val inferred = nodeIds.associateWith { 0 }.toMutableMap()
+            for (source in ordered) {
+                for (target in forwardOutgoing.getValue(source)) {
+                    inferred[target] = maxOf(inferred.getValue(target), inferred.getValue(source) + 1)
+                }
             }
-        }
-        for (source in ordered.asReversed()) {
-            val latestLevel = forwardOutgoing.getValue(source)
-                .minOfOrNull { target -> levels.getValue(target) - 1 }
-                ?: continue
-            val earliestLevel = forwardIncoming.getValue(source)
-                .maxOfOrNull { parent -> levels.getValue(parent) + 1 }
-                ?: 0
-            if (latestLevel >= earliestLevel) {
-                levels[source] = maxOf(levels.getValue(source), latestLevel)
+            for (source in ordered.asReversed()) {
+                val latestLevel = forwardOutgoing.getValue(source)
+                    .minOfOrNull { target -> inferred.getValue(target) - 1 }
+                    ?: continue
+                val earliestLevel = forwardIncoming.getValue(source)
+                    .maxOfOrNull { parent -> inferred.getValue(parent) + 1 }
+                    ?: 0
+                if (latestLevel >= earliestLevel) {
+                    inferred[source] = maxOf(inferred.getValue(source), latestLevel)
+                }
             }
+            inferred
         }
 
         val byLevel = nodeIds.groupBy(levels::getValue).toSortedMap()
@@ -295,7 +304,14 @@ object GraphLayoutEngine {
                 allSpan
         }
 
-        repeat(4) { pass ->
+        val optimizationPasses = if (
+            nodeIds.size <= MAX_OPTIMIZED_NODES && forwardEdges.size <= MAX_OPTIMIZED_EDGES
+        ) {
+            4
+        } else {
+            0
+        }
+        repeat(optimizationPasses) { pass ->
             val levelsToOptimize = if (pass % 2 == 0) byLevel.values else byLevel.values.reversed()
             for (ids in levelsToOptimize) {
                 var index = 0
@@ -321,19 +337,27 @@ object GraphLayoutEngine {
         }
 
         val sizes = snapshot.nodes.associate { it.id to nodeSize(it) }
+        val incomingAtLevelCount = snapshot.edges.groupingBy { edge ->
+            edge.targetId to levels[edge.sourceId]
+        }.eachCount()
+        val outgoingAtLevelCount = snapshot.edges.groupingBy { edge ->
+            edge.sourceId to levels[edge.targetId]
+        }.eachCount()
+        val edgesByNode = nodeIds.associateWith { id ->
+            snapshot.edges.filter { edge -> edge.sourceId == id || edge.targetId == id }
+        }
         val labelFootprints = nodeIds.associateWith { id ->
-            snapshot.edges
+            edgesByNode.getValue(id)
                 .asSequence()
-                .filter { edge -> edge.sourceId == id || edge.targetId == id }
                 .maxOfOrNull { edge ->
                     if (testById[edge.sourceId] == true || testById[edge.targetId] == true) {
                         return@maxOfOrNull 0.0
                     }
                     val oppositeId = if (edge.sourceId == id) edge.targetId else edge.sourceId
-                    val sharesOppositeEndpoint = snapshot.edges.any { other ->
-                        other !== edge &&
-                            ((edge.sourceId == id && other.targetId == oppositeId && levels[other.sourceId] == levels[id]) ||
-                                (edge.targetId == id && other.sourceId == oppositeId && levels[other.targetId] == levels[id]))
+                    val sharesOppositeEndpoint = if (edge.sourceId == id) {
+                        incomingAtLevelCount.getOrDefault(oppositeId to levels[id], 0) > 1
+                    } else {
+                        outgoingAtLevelCount.getOrDefault(oppositeId to levels[id], 0) > 1
                     }
                     edgeLabelWidth(edge) * if (sharesOppositeEndpoint) 2.0 else 1.0
                 }
@@ -399,4 +423,7 @@ object GraphLayoutEngine {
         val minX: Double,
         val maxX: Double,
     )
+
+    private const val MAX_OPTIMIZED_NODES = 36
+    private const val MAX_OPTIMIZED_EDGES = 72
 }

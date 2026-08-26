@@ -1,8 +1,11 @@
 # Go File Relation Graph
 
-GoLand plugin that visualizes calls and interface implementations between Go files currently open in the editor.
+GoLand plugin that visualizes calls and interface implementations between Go files. It has an
+open-files graph and snapshot parent graphs for a function or method selected in the editor.
 
 ## Current behavior
+
+### Open Files
 
 - Nodes are open, non-generated Go files.
 - Solid relations are direct function or concrete-method calls.
@@ -16,6 +19,39 @@ GoLand plugin that visualizes calls and interface implementations between Go fil
 - Right-click an interface-dispatched label to open the parent interface used by the call.
 - Drag a tile to reposition it and drag the canvas to pan. Use a mouse wheel or a macOS trackpad pinch to zoom.
 - Use View Options to control auto-refresh, include test files, or show files without relations.
+
+### Parent Graph
+
+Place the caret inside a named Go function or method and choose **Build Parent Graph** from the
+editor context menu. A new closable `Parents: …` tab is added next to the permanent
+`Open Files` tab.
+
+- The search walks possible callers breadth-first inside the nearest `go.mod`.
+- Direct calls, calls through interfaces, and functions or methods passed as call arguments are supported.
+- SDK, module-cache, vendor, generated, and other-module files are excluded. Tests can be enabled per tab.
+- Parent snapshots use a breadth-first hierarchy and default to 50 parent files and 10 visible file
+  levels including the selected function. Change `Max parent files` in a parent tab when a larger
+  snapshot is needed.
+- Reaching a limit adds a `More parents not shown` tile and shows a notification.
+- Cycles are not drawn in the current version.
+- Click a file tile to open its only participating function, or choose a function when the file contains several.
+- Parent tabs are snapshots. Use **Refresh Parent Graph** to rebuild one; tabs are not restored after restart.
+
+For example, passing a method as a callback produces a direct visible parent relation without a
+tile for the registration helper:
+
+```go
+func Register(callback func(http.ResponseWriter, *http.Request)) {
+    router.HandleFunc("/booking", callback)
+}
+
+func Configure(handler *Handler) {
+    Register(handler.Create)
+}
+```
+
+The parent graph contains `configure.go / Configure()` → `handler.go / (*Handler).Create()` with a
+callback-argument relation.
 
 ## Development
 

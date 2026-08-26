@@ -15,6 +15,8 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import dev.firefly4ik.gofilerelationgraph.model.CallSite
 import dev.firefly4ik.gofilerelationgraph.model.CallableRelation
+import dev.firefly4ik.gofilerelationgraph.model.FileNavigationTarget
+import dev.firefly4ik.gofilerelationgraph.model.FileNode
 import java.awt.BorderLayout
 import java.awt.Point
 import javax.swing.JComponent
@@ -26,6 +28,14 @@ class GraphNavigator(
 ) {
     fun openFile(file: VirtualFile) {
         openInCurrentEditor(file, 0)
+    }
+
+    fun openNode(node: FileNode, component: JComponent, point: Point) {
+        when (node.navigationTargets.size) {
+            0 -> openFile(node.file)
+            1 -> navigateTo(node.navigationTargets.single().pointer)
+            else -> showNavigationTargets(node.navigationTargets, component, point)
+        }
     }
 
     fun openTarget(callable: CallableRelation) {
@@ -57,6 +67,30 @@ class GraphNavigator(
                     border = JBUI.Borders.empty(4, 8)
                     add(SimpleColoredComponent().apply {
                         append(value.lineText, SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, foreground))
+                    }, BorderLayout.CENTER)
+                    add(JBLabel(value.lineNumber.toString()).apply {
+                        this.foreground = if (selected) list.selectionForeground else SimpleTextAttributes.GRAYED_ATTRIBUTES.fgColor
+                        horizontalAlignment = JBLabel.RIGHT
+                    }, BorderLayout.EAST)
+                }
+            })
+            .setItemChosenCallback { navigateTo(it.pointer) }
+            .createPopup()
+            .show(com.intellij.ui.awt.RelativePoint(component, point))
+    }
+
+    private fun showNavigationTargets(targets: List<FileNavigationTarget>, component: JComponent, point: Point) {
+        JBPopupFactory.getInstance()
+            .createPopupChooserBuilder(targets)
+            .setTitle("Functions in file")
+            .setRenderer(ListCellRenderer<FileNavigationTarget> { list, value, _, selected, _ ->
+                val foreground = if (selected) list.selectionForeground else list.foreground
+                JPanel(BorderLayout(JBUI.scale(16), 0)).apply {
+                    isOpaque = true
+                    background = if (selected) list.selectionBackground else list.background
+                    border = JBUI.Borders.empty(4, 8)
+                    add(SimpleColoredComponent().apply {
+                        append(value.label, SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, foreground))
                     }, BorderLayout.CENTER)
                     add(JBLabel(value.lineNumber.toString()).apply {
                         this.foreground = if (selected) list.selectionForeground else SimpleTextAttributes.GRAYED_ATTRIBUTES.fgColor

@@ -4,7 +4,8 @@
     <vendor>firefly4ik</vendor>
 
     <description><![CDATA[
-        Visualizes calls and interface implementations between Go files currently open in the editor.
+        Visualizes calls and interface implementations between Go files. Build a live graph for open files,
+        or create a snapshot graph of possible project callers for the Go function or method under the caret.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -12,6 +13,10 @@
     <depends>com.intellij.modules.goland</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup
+            id="Go File Relation Graph"
+            displayType="BALLOON"
+            isLogByDefault="true"/>
         <toolWindow
             id="Go File Relation Graph"
             anchor="bottom"
@@ -19,5 +24,14 @@
             icon="/icons/toolWindow.svg"
             factoryClass="dev.firefly4ik.gofilerelationgraph.ui.GoFileRelationGraphToolWindowFactory"/>
     </extensions>
-</idea-plugin>
 
+    <actions>
+        <action
+            id="dev.firefly4ik.gofilerelationgraph.BuildParentGraph"
+            class="dev.firefly4ik.gofilerelationgraph.actions.BuildParentGraphAction"
+            text="Build Parent Graph"
+            description="Build a graph of project functions that can call the function under the caret">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

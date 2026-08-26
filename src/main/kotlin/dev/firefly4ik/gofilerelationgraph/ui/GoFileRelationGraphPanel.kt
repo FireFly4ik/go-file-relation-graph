@@ -33,13 +33,6 @@ class GoFileRelationGraphPanel(
 
     private fun createToolbar(): javax.swing.JComponent {
         val actions = DefaultActionGroup()
-        actions.add(object : AnAction("Refresh", "Rebuild graph from open Go files", AllIcons.Actions.Refresh) {
-            override fun actionPerformed(event: AnActionEvent) {
-                controller.refreshNow()
-            }
-
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        })
         actions.add(object : ToggleAction("Show Labels", "Show function and method names on relations", AllIcons.Nodes.Tag) {
             override fun isSelected(event: AnActionEvent) = canvas.showLabels
 
