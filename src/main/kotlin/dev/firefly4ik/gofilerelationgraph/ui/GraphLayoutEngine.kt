@@ -229,12 +229,9 @@ object GraphLayoutEngine {
                 outgoing.getValue(edge.sourceId) += edge.targetId
                 incoming.getValue(edge.targetId) += edge.sourceId
             }
-            val key = edge.sourceId to edge.targetId
-            val edgeWeight = edge.callables.sumOf { callable ->
-                val relationWeight = if (callable.isInterfaceDispatch || callable.isCallbackArgument) 1 else 4
-                relationWeight * callable.callSites.size.coerceIn(1, 4)
+            weights[edge.sourceId to edge.targetId] = edge.callables.sumOf { callable ->
+                if (callable.isInterfaceDispatch || callable.isCallbackArgument) 1 else 4
             }.coerceAtLeast(1)
-            weights[key] = weights.getOrDefault(key, 0) + edgeWeight
         }
 
         val remaining = nodeIds.toMutableSet()
@@ -319,24 +316,6 @@ object GraphLayoutEngine {
             inferred
         }
 
-        val layoutEdges = validEdges.filter { edge ->
-            levels.getValue(edge.sourceId) < levels.getValue(edge.targetId)
-        }
-        val layoutEdgesBySource = layoutEdges.groupBy(FileEdge::sourceId)
-        val layoutEdgesByTarget = layoutEdges.groupBy(FileEdge::targetId)
-        val layoutOutgoing = nodeIds.associateWith { id ->
-            layoutEdgesBySource[id].orEmpty().asSequence()
-                .map(FileEdge::targetId)
-                .distinct()
-                .toList()
-        }
-        val layoutIncoming = nodeIds.associateWith { id ->
-            layoutEdgesByTarget[id].orEmpty().asSequence()
-                .map(FileEdge::sourceId)
-                .distinct()
-                .toList()
-        }
-
         val byLevel = nodeIds.groupBy(levels::getValue).toSortedMap()
             .mapValuesTo(sortedMapOf()) { (_, ids) ->
                 ids.sortedBy(titleById::getValue).toMutableList()
@@ -349,36 +328,26 @@ object GraphLayoutEngine {
             for (ids in levelsToOrder) {
                 ids.sortWith(compareBy<String> { id ->
                     val allNeighbors = if (pass % 2 == 0) {
-                        layoutIncoming.getValue(id)
+                        forwardIncoming.getValue(id)
                     } else {
-                        layoutOutgoing.getValue(id)
+                        forwardOutgoing.getValue(id)
                     }
                     val preferredNeighbors = if (testById[id] == false) {
                         allNeighbors.filter { neighbor -> testById[neighbor] == false }.ifEmpty { allNeighbors }
                     } else {
                         allNeighbors
                     }
-                    val weightedRanks = preferredNeighbors.mapNotNull { neighbor ->
-                        val neighborRank = rank[neighbor] ?: return@mapNotNull null
-                        val weight = if (pass % 2 == 0) {
-                            weights[neighbor to id] ?: 1
-                        } else {
-                            weights[id to neighbor] ?: 1
-                        }
-                        neighborRank to weight
-                    }
-                    val totalWeight = weightedRanks.sumOf(Pair<Double, Int>::second)
-                    if (totalWeight == 0) {
-                        rank.getValue(id)
-                    } else {
-                        weightedRanks.sumOf { (neighborRank, weight) -> neighborRank * weight } / totalWeight
-                    }
+                    preferredNeighbors.mapNotNull(rank::get).average().takeUnless(Double::isNaN)
+                        ?: rank.getValue(id)
                 }.thenBy(siblingOrder::getValue).thenBy(titleById::getValue))
                 ids.forEachIndexed { index, id -> rank[id] = index.toDouble() }
             }
         }
 
-        val productionEdges = layoutEdges.filter { edge ->
+        val forwardEdges = validEdges.filter { edge ->
+            orderIndex.getValue(edge.sourceId) < orderIndex.getValue(edge.targetId)
+        }
+        val productionEdges = forwardEdges.filter { edge ->
             testById[edge.sourceId] == false && testById[edge.targetId] == false
         }
         val layoutCost = {
@@ -387,7 +356,7 @@ object GraphLayoutEngine {
                 (rank.getValue(id) + 0.5) / ids.size
             }
             var callOrderViolations = 0
-            for (edges in layoutEdges.groupBy(FileEdge::sourceId).values) {
+            for (edges in forwardEdges.groupBy(FileEdge::sourceId).values) {
                 for (firstIndex in 0 until edges.lastIndex) {
                     for (secondIndex in firstIndex + 1 until edges.size) {
                         val first = edges[firstIndex]
@@ -442,11 +411,11 @@ object GraphLayoutEngine {
                 crossings
             }
             val productionCrossings = crossingCount(productionEdges)
-            val allCrossings = crossingCount(layoutEdges)
+            val allCrossings = crossingCount(forwardEdges)
             val productionSpan = productionEdges.sumOf { edge ->
                 kotlin.math.abs(normalizedRank.getValue(edge.sourceId) - normalizedRank.getValue(edge.targetId))
             }
-            val allSpan = layoutEdges.sumOf { edge ->
+            val allSpan = forwardEdges.sumOf { edge ->
                 kotlin.math.abs(normalizedRank.getValue(edge.sourceId) - normalizedRank.getValue(edge.targetId))
             }
             callOrderViolations * 1_000_000_000_000_000.0 +
@@ -457,7 +426,7 @@ object GraphLayoutEngine {
         }
 
         val optimizationPasses = if (
-            nodeIds.size <= MAX_OPTIMIZED_NODES && layoutEdges.size <= MAX_OPTIMIZED_EDGES
+            nodeIds.size <= MAX_OPTIMIZED_NODES && forwardEdges.size <= MAX_OPTIMIZED_EDGES
         ) {
             4
         } else {
@@ -595,35 +564,24 @@ object GraphLayoutEngine {
             for (ids in levelsToAlign) {
                 alignLevel(ids, ids.associateWith { id ->
                     val allNeighbors = if (pass % 2 == 0) {
-                        layoutIncoming.getValue(id)
+                        forwardIncoming.getValue(id)
                     } else {
-                        layoutOutgoing.getValue(id)
+                        forwardOutgoing.getValue(id)
                     }
                     val preferredNeighbors = if (testById[id] == false) {
                         allNeighbors.filter { neighbor -> testById[neighbor] == false }.ifEmpty { allNeighbors }
                     } else {
                         allNeighbors
                     }
-                    val weightedCenters = preferredNeighbors.map { neighbor ->
-                        val weight = if (pass % 2 == 0) {
-                            weights[neighbor to id] ?: 1
-                        } else {
-                            weights[id to neighbor] ?: 1
-                        }
-                        result.getValue(neighbor).x to weight
-                    }
-                    val totalWeight = weightedCenters.sumOf(Pair<Double, Int>::second)
-                    if (totalWeight == 0) {
-                        result.getValue(id).x
-                    } else {
-                        weightedCenters.sumOf { (center, weight) -> center * weight } / totalWeight
-                    }
+                    preferredNeighbors.map { neighbor -> result.getValue(neighbor).x }
+                        .average().takeUnless(Double::isNaN)
+                        ?: result.getValue(id).x
                 })
             }
         }
         repeat(CORRIDOR_PASSES) {
             for ((level, ids) in byLevel) {
-                val corridors = layoutEdges.mapNotNull { edge ->
+                val corridors = forwardEdges.mapNotNull { edge ->
                     val sourceLevel = levels.getValue(edge.sourceId)
                     val targetLevel = levels.getValue(edge.targetId)
                     if (level !in sourceLevel + 1 until targetLevel) return@mapNotNull null
@@ -661,7 +619,7 @@ object GraphLayoutEngine {
     private const val MAX_OPTIMIZED_NODES = 36
     private const val MAX_OPTIMIZED_EDGES = 72
     private const val MAX_EXPLICIT_LEVEL_WIDTH = 10
-    private const val BARYCENTER_PASSES = 8
+    private const val BARYCENTER_PASSES = 4
     private const val COORDINATE_PASSES = 8
     private const val CORRIDOR_PASSES = 2
     private const val MAX_EXTRA_CROSS_GAP = 90.0

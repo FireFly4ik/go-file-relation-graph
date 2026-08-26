@@ -37,8 +37,6 @@ editor context menu. A new closable `Parents: …` tab is added next to the perm
   levels including the selected function. Change `Max parent files` in a parent tab when a larger
   snapshot is needed.
 - Wide parent levels are split into consecutive rows without mixing files from different breadth-first levels.
-- Horizontal ordering uses every relation that points to a lower breadth-first level, including relations that
-  cycle breaking previously classified as reverse edges, and gives repeated relations more alignment weight.
 - Reaching a limit adds a `More parents not shown` tile and shows a notification.
 - Cycles are not drawn in the current version.
 - Click a file tile to open its only participating function, or choose a function when the file contains several.

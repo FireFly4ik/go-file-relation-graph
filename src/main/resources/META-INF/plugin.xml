@@ -47,12 +47,6 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>1.0.3</h3>
-        <ul>
-            <li>Use every downward parent relation during horizontal crossing minimization.</li>
-            <li>Weight repeated relations and grouped call sites so strongly connected branches stay closer.</li>
-            <li>Run additional linear barycenter passes for large graphs without enabling expensive global swaps.</li>
-        </ul>
         <h3>1.0.2</h3>
         <ul>
             <li>Lock files inside shared-output groups and move the complete group from a file or its frame.</li>
