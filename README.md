@@ -1,7 +1,8 @@
 # Go File Relation Graph
 
-GoLand plugin that visualizes calls and interface implementations between Go files. It has an
-open-files graph and snapshot parent graphs for a function or method selected in the editor.
+GoLand plugin that visualizes how Go files are connected through direct calls, interface dispatch,
+and callbacks. It provides a live graph for open files and snapshot parent graphs for a function or
+method selected in the editor.
 
 ## Current behavior
 

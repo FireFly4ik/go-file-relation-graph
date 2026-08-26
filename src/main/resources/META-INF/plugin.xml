@@ -2,11 +2,63 @@
     <id>dev.firefly4ik.go-file-relation-graph</id>
     <name>Go File Relation Graph</name>
     <vendor>firefly4ik</vendor>
+    <category>Code tools</category>
 
     <description><![CDATA[
-        Visualizes calls and interface implementations between Go files. Build a live graph for open files,
-        or create a snapshot graph of possible project callers for the Go function or method under the caret.
+        <p>
+            <b>Go File Relation Graph</b> visualizes how Go files are connected through function calls,
+            method calls, interface dispatch, and callbacks. It turns the part of a codebase you are working
+            with into an interactive graph, helping you trace execution flow and understand unfamiliar code.
+        </p>
+
+        <h3>Explore open files</h3>
+        <ul>
+            <li>Build a live relation graph from the Go files currently open in the editor.</li>
+            <li>Distinguish direct calls, interface-dispatched calls, callbacks, and test relations.</li>
+            <li>Group opposite calls between two files into a single bidirectional relation.</li>
+            <li>Automatically refresh the graph as files are opened, closed, or edited.</li>
+        </ul>
+
+        <h3>Find possible callers</h3>
+        <p>
+            Place the caret inside a named function or method and select <b>Build Parent Graph</b> from the
+            editor context menu. The plugin searches the current Go module for project functions that can
+            reach the selected declaration and opens the result in a separate graph tab.
+        </p>
+        <ul>
+            <li>Follow direct calls, interface implementations, and functions or methods passed as arguments.</li>
+            <li>Keep analysis inside the nearest <code>go.mod</code>, excluding generated, vendor, SDK, and module-cache code.</li>
+            <li>Optionally include test files and configure the maximum number of parent files.</li>
+        </ul>
+
+        <h3>Navigate visually</h3>
+        <ul>
+            <li>Click a file to open it in the editor.</li>
+            <li>Click a relation label to navigate to the called function or method.</li>
+            <li>Shift-click a relation to open its call site, with a chooser when several call sites exist.</li>
+            <li>Right-click an interface relation to open the declaring interface.</li>
+            <li>Pan, zoom, rearrange files, reset the layout, and highlight connected files and relations on hover.</li>
+        </ul>
+
+        <p>
+            Graph analysis runs locally using GoLand's project model and indexes. No source code is sent to an
+            external service.
+        </p>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>1.0.0</h3>
+        <p>First stable release of Go File Relation Graph.</p>
+        <ul>
+            <li>Live relation graph for open Go files.</li>
+            <li>Parent-call graph for the function or method under the caret.</li>
+            <li>Direct, interface, callback, bidirectional, and test relations.</li>
+            <li>Editor navigation to files, implementations, interfaces, and individual call sites.</li>
+            <li>Automatic layered layout with branch grouping, long-edge corridors, panning, and zooming.</li>
+            <li>Configurable tests, isolated files, auto-refresh, parent depth, and parent-file limit.</li>
+            <li>Optimized analysis and rendering for larger graphs.</li>
+        </ul>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.plugins.go</depends>
