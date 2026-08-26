@@ -15,6 +15,7 @@ method selected in the editor.
 - Opposite relations between the same two files share one line with arrows at both ends.
 - Files on the same level with identical outgoing relations form a visual group: incoming arrows
   still reach each file, while repeated outgoing arrows share one collector and one set of labels.
+- Dragging a grouped file or the group frame moves the complete group while keeping its internal layout locked.
 - Files called earlier by the same parent are placed further left on their level.
 - Click a file tile to open the file.
 - Click a callable label to open its implementation.
@@ -35,6 +36,7 @@ editor context menu. A new closable `Parents: …` tab is added next to the perm
 - Parent snapshots use a breadth-first hierarchy and default to 50 parent files and 10 visible file
   levels including the selected function. Change `Max parent files` in a parent tab when a larger
   snapshot is needed.
+- Wide parent levels are split into consecutive rows without mixing files from different breadth-first levels.
 - Reaching a limit adds a `More parents not shown` tile and shows a notification.
 - Cycles are not drawn in the current version.
 - Click a file tile to open its only participating function, or choose a function when the file contains several.

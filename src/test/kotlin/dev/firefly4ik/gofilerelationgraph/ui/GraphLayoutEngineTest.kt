@@ -200,6 +200,32 @@ class GraphLayoutEngineTest {
     }
 
     @Test
+    fun `wide explicit hierarchy keeps every original level in its own row range`() {
+        val middleIds = (1..12).map { index -> "middle-$index.go" }
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("root.go", "root.go", LightVirtualFile("root.go"), false, layoutLevel = 0),
+                FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 2),
+            ) + middleIds.map { id ->
+                FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 1)
+            },
+            edges = middleIds.flatMap { id ->
+                listOf(
+                    FileEdge("root.go", id, emptyList()),
+                    FileEdge(id, "target.go", emptyList()),
+                )
+            } + FileEdge("target.go", middleIds.first(), emptyList()),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+        val middleRows = middleIds.map { id -> positions.getValue(id).y }
+
+        assertTrue(positions.getValue("root.go").y < middleRows.min())
+        assertTrue(middleRows.max() < positions.getValue("target.go").y)
+        assertEquals(2, middleRows.toSet().size)
+    }
+
+    @Test
     fun `single chain stays aligned when neighboring branch is wider`() {
         val levels = mapOf(
             "left-top.go" to 0,

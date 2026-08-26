@@ -68,9 +68,9 @@ class GraphCanvasTest : BasePlatformTestCase() {
         assertEquals(listOf("source-a", "source-b"), group.memberIds)
         assertEquals(2, group.sharedRelations.single().callables.single().callSites.size)
 
-        val positions = GraphLayoutEngine.layout(snapshot)
-        assertEquals(positions.getValue("source-a").y, positions.getValue("source-b").y)
-        assertTrue(positions.getValue("source-a").x < positions.getValue("source-b").x)
+        val automaticPositions = GraphLayoutEngine.layout(snapshot)
+        assertEquals(automaticPositions.getValue("source-a").y, automaticPositions.getValue("source-b").y)
+        assertTrue(automaticPositions.getValue("source-a").x < automaticPositions.getValue("source-b").x)
 
         val canvas = GraphCanvas(GraphNavigator(project)).apply {
             font = UIManager.getFont("Label.font")
@@ -102,6 +102,134 @@ class GraphCanvasTest : BasePlatformTestCase() {
         val incomingCurve = curves.single { (_, key) -> key == "parent-a" to "source-a" }.first
         assertEquals(bounds.getValue("source-a").centerX, incomingCurve.x2, 0.01)
         assertEquals(bounds.getValue("source-a").minY, incomingCurve.y2, 0.01)
+
+        @Suppress("UNCHECKED_CAST")
+        val positions = GraphCanvas::class.java.getDeclaredField("positions").apply { isAccessible = true }
+            .get(canvas) as MutableMap<String, java.awt.geom.Point2D.Double>
+        val beforeMemberDragA = java.awt.geom.Point2D.Double(
+            positions.getValue("source-a").x,
+            positions.getValue("source-a").y,
+        )
+        val beforeMemberDragB = java.awt.geom.Point2D.Double(
+            positions.getValue("source-b").x,
+            positions.getValue("source-b").y,
+        )
+        val scale = GraphCanvas::class.java.getDeclaredField("scale").apply { isAccessible = true }.getDouble(canvas)
+        val offsetX = GraphCanvas::class.java.getDeclaredField("offsetX").apply { isAccessible = true }.getDouble(canvas)
+        val offsetY = GraphCanvas::class.java.getDeclaredField("offsetY").apply { isAccessible = true }.getDouble(canvas)
+        val memberX = (bounds.getValue("source-a").centerX * scale + offsetX).toInt()
+        val memberY = (bounds.getValue("source-a").centerY * scale + offsetY).toInt()
+        canvas.dispatchEvent(
+            MouseEvent(
+                canvas,
+                MouseEvent.MOUSE_PRESSED,
+                System.currentTimeMillis(),
+                InputEvent.BUTTON1_DOWN_MASK,
+                memberX,
+                memberY,
+                1,
+                false,
+                MouseEvent.BUTTON1,
+            ),
+        )
+        canvas.dispatchEvent(
+            MouseEvent(
+                canvas,
+                MouseEvent.MOUSE_DRAGGED,
+                System.currentTimeMillis(),
+                InputEvent.BUTTON1_DOWN_MASK,
+                memberX + 42,
+                memberY + 18,
+                0,
+                false,
+                MouseEvent.NOBUTTON,
+            ),
+        )
+        canvas.dispatchEvent(
+            MouseEvent(
+                canvas,
+                MouseEvent.MOUSE_RELEASED,
+                System.currentTimeMillis(),
+                0,
+                memberX + 42,
+                memberY + 18,
+                1,
+                false,
+                MouseEvent.BUTTON1,
+            ),
+        )
+
+        val memberDeltaAX = positions.getValue("source-a").x - beforeMemberDragA.x
+        val memberDeltaAY = positions.getValue("source-a").y - beforeMemberDragA.y
+        assertEquals(memberDeltaAX, positions.getValue("source-b").x - beforeMemberDragB.x, 0.01)
+        assertEquals(memberDeltaAY, positions.getValue("source-b").y - beforeMemberDragB.y, 0.01)
+        assertEquals(beforeMemberDragB.x - beforeMemberDragA.x, positions.getValue("source-b").x - positions.getValue("source-a").x, 0.01)
+
+        canvas.paint(BufferedImage(900, 600, BufferedImage.TYPE_INT_ARGB).graphics)
+        @Suppress("UNCHECKED_CAST")
+        val groupBounds = GraphCanvas::class.java.getDeclaredField("groupBoundsById").apply { isAccessible = true }
+            .get(canvas) as Map<String, Rectangle2D.Double>
+        val frame = groupBounds.values.single()
+        val frameX = ((frame.minX + 6.0) * scale + offsetX).toInt()
+        val frameY = ((frame.minY + 6.0) * scale + offsetY).toInt()
+        val beforeFrameDragA = java.awt.geom.Point2D.Double(
+            positions.getValue("source-a").x,
+            positions.getValue("source-a").y,
+        )
+        val beforeFrameDragB = java.awt.geom.Point2D.Double(
+            positions.getValue("source-b").x,
+            positions.getValue("source-b").y,
+        )
+        canvas.dispatchEvent(
+            MouseEvent(
+                canvas,
+                MouseEvent.MOUSE_PRESSED,
+                System.currentTimeMillis(),
+                InputEvent.BUTTON1_DOWN_MASK,
+                frameX,
+                frameY,
+                1,
+                false,
+                MouseEvent.BUTTON1,
+            ),
+        )
+        canvas.dispatchEvent(
+            MouseEvent(
+                canvas,
+                MouseEvent.MOUSE_DRAGGED,
+                System.currentTimeMillis(),
+                InputEvent.BUTTON1_DOWN_MASK,
+                frameX - 30,
+                frameY + 12,
+                0,
+                false,
+                MouseEvent.NOBUTTON,
+            ),
+        )
+        canvas.dispatchEvent(
+            MouseEvent(
+                canvas,
+                MouseEvent.MOUSE_RELEASED,
+                System.currentTimeMillis(),
+                0,
+                frameX - 30,
+                frameY + 12,
+                1,
+                false,
+                MouseEvent.BUTTON1,
+            ),
+        )
+
+        assertEquals(
+            positions.getValue("source-a").x - beforeFrameDragA.x,
+            positions.getValue("source-b").x - beforeFrameDragB.x,
+            0.01,
+        )
+        assertEquals(
+            positions.getValue("source-a").y - beforeFrameDragA.y,
+            positions.getValue("source-b").y - beforeFrameDragB.y,
+            0.01,
+        )
     }
 
     fun testLimitPlaceholderEdgeWithoutCallablesPaints() {

@@ -44,12 +44,14 @@ class GraphCanvas(
     private var snapshot = GraphSnapshot.EMPTY
     private var nodesById = emptyMap<String, FileNode>()
     private var outgoingGroups = emptyList<OutgoingRelationGroup>()
+    private var outgoingGroupByMemberId = emptyMap<String, OutgoingRelationGroup>()
     private var edgeKeysByNode = emptyMap<String, Set<Pair<String, String>>>()
     private var edgeKeysByCallable = emptyMap<CallableRelation, Set<Pair<String, String>>>()
     private var nodeIdsByEdgeKey = emptyMap<Pair<String, String>, Set<String>>()
     private val positions = mutableMapOf<String, Point2D.Double>()
     private val targetPositions = mutableMapOf<String, Point2D.Double>()
     private val nodeBounds = mutableMapOf<String, Rectangle2D.Double>()
+    private val groupBoundsById = mutableMapOf<String, Rectangle2D.Double>()
     private val labelBounds = mutableListOf<Pair<Rectangle2D.Double, CallableRelation>>()
     private val labelGroupBounds = mutableListOf<Rectangle2D.Double>()
     private val edgeCurves = mutableListOf<Pair<CubicCurve2D.Double, Pair<String, String>>>()
@@ -61,12 +63,14 @@ class GraphCanvas(
     private var targetOffsetX = 0.0
     private var targetOffsetY = 0.0
     private var draggedNodeId: String? = null
+    private var draggedGroupId: String? = null
     private var dragStart: Point? = null
     private var lastMousePoint: Point? = null
     private var lastPointerPoint: Point? = null
     private var pressedCallable: CallableRelation? = null
     private var hoveredCallable: CallableRelation? = null
     private var hoveredEdgeKey: Pair<String, String>? = null
+    private var hoveredGroupId: String? = null
     private var highlightedNodeIds = emptySet<String>()
     private var highlightedEdgeKeys = emptySet<Pair<String, String>>()
     private var hasDragged = false
@@ -116,9 +120,12 @@ class GraphCanvas(
                 }
 
                 if (pressedCallable == null) {
-                    draggedNodeId = nodeAt(event.point)?.id
+                    val pressedNode = nodeAt(event.point)
+                    val pressedGroup = pressedNode?.id?.let(outgoingGroupByMemberId::get) ?: groupAt(event.point)
+                    draggedGroupId = pressedGroup?.id
+                    draggedNodeId = pressedNode?.id?.takeIf { pressedGroup == null }
                     cursor = Cursor.getPredefinedCursor(
-                        if (draggedNodeId == null) Cursor.MOVE_CURSOR else Cursor.HAND_CURSOR,
+                        if (draggedNodeId == null || draggedGroupId != null) Cursor.MOVE_CURSOR else Cursor.HAND_CURSOR,
                     )
                 }
             }
@@ -132,8 +139,17 @@ class GraphCanvas(
                     hasDragged = true
                 }
 
+                val groupId = draggedGroupId
                 val nodeId = draggedNodeId
-                if (nodeId != null) {
+                if (groupId != null) {
+                    val group = outgoingGroups.firstOrNull { candidate -> candidate.id == groupId } ?: return
+                    for (memberId in group.memberIds) {
+                        val position = positions[memberId] ?: continue
+                        position.x += dx / scale
+                        position.y += dy / scale
+                        targetPositions[memberId] = Point2D.Double(position.x, position.y)
+                    }
+                } else if (nodeId != null) {
                     val position = positions[nodeId] ?: return
                     position.x += dx / scale
                     position.y += dy / scale
@@ -167,6 +183,7 @@ class GraphCanvas(
                 }
                 pressedCallable = null
                 draggedNodeId = null
+                draggedGroupId = null
                 dragStart = null
                 lastMousePoint = null
                 cursor = Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
@@ -180,26 +197,38 @@ class GraphCanvas(
                 val hovered = callableAt(event.point)
                 val hoveredNode = if (hovered == null) nodeAt(event.point) else null
                 val edgeKey = if (hovered == null && hoveredNode == null) edgeAt(event.point) else null
+                val hoveredGroup = if (hovered == null && hoveredNode == null && edgeKey == null) {
+                    groupAt(event.point)
+                } else {
+                    null
+                }
                 val edgeKeys = when {
                     hovered != null -> edgeKeysByCallable[hovered].orEmpty()
                     hoveredNode != null -> edgeKeysByNode[hoveredNode.id].orEmpty()
                     edgeKey != null -> setOf(edgeKey)
+                    hoveredGroup != null -> hoveredGroup.memberIds.flatMapTo(mutableSetOf()) { memberId ->
+                        edgeKeysByNode[memberId].orEmpty()
+                    }
                     else -> emptySet()
                 }
                 val nodeIds = edgeKeys.flatMapTo(mutableSetOf()) { key -> nodeIdsByEdgeKey[key].orEmpty() }
                 if (hoveredNode != null) nodeIds += hoveredNode.id
+                if (hoveredGroup != null) nodeIds += hoveredGroup.memberIds
                 if (
-                    hovered != hoveredCallable || edgeKey != hoveredEdgeKey ||
+                    hovered != hoveredCallable || edgeKey != hoveredEdgeKey || hoveredGroup?.id != hoveredGroupId ||
                     edgeKeys != highlightedEdgeKeys || nodeIds != highlightedNodeIds
                 ) {
                     hoveredCallable = hovered
                     hoveredEdgeKey = edgeKey
+                    hoveredGroupId = hoveredGroup?.id
                     highlightedEdgeKeys = edgeKeys
                     highlightedNodeIds = nodeIds
                     repaint()
                 }
                 cursor = Cursor.getPredefinedCursor(
-                    if (hovered != null || edgeKey != null || hoveredNode != null) {
+                    if (hoveredGroup != null) {
+                        Cursor.MOVE_CURSOR
+                    } else if (hovered != null || edgeKey != null || hoveredNode != null) {
                         Cursor.HAND_CURSOR
                     } else {
                         Cursor.DEFAULT_CURSOR
@@ -209,11 +238,12 @@ class GraphCanvas(
 
             override fun mouseExited(event: MouseEvent) {
                 if (
-                    hoveredCallable != null || hoveredEdgeKey != null ||
+                    hoveredCallable != null || hoveredEdgeKey != null || hoveredGroupId != null ||
                     highlightedNodeIds.isNotEmpty() || highlightedEdgeKeys.isNotEmpty()
                 ) {
                     hoveredCallable = null
                     hoveredEdgeKey = null
+                    hoveredGroupId = null
                     highlightedNodeIds = emptySet()
                     highlightedEdgeKeys = emptySet()
                     repaint()
@@ -312,6 +342,9 @@ class GraphCanvas(
         snapshot = value
         nodesById = value.nodes.associateBy(FileNode::id)
         outgoingGroups = OutgoingRelationGroups.find(value)
+        outgoingGroupByMemberId = outgoingGroups.flatMap { group ->
+            group.memberIds.map { memberId -> memberId to group }
+        }.toMap()
         val mutableEdgeKeysByNode = mutableMapOf<String, MutableSet<Pair<String, String>>>()
         val mutableEdgeKeysByCallable = mutableMapOf<CallableRelation, MutableSet<Pair<String, String>>>()
         val mutableNodeIdsByEdgeKey = mutableMapOf<Pair<String, String>, Set<String>>()
@@ -349,6 +382,7 @@ class GraphCanvas(
         nodeIdsByEdgeKey = mutableNodeIdsByEdgeKey
         hoveredCallable = null
         hoveredEdgeKey = null
+        hoveredGroupId = null
         highlightedNodeIds = emptySet()
         highlightedEdgeKeys = emptySet()
         val automatic = automaticLayout(value)
@@ -466,6 +500,7 @@ class GraphCanvas(
 
         g.transform(AffineTransform(scale, 0.0, 0.0, scale, offsetX, offsetY))
         nodeBounds.clear()
+        groupBoundsById.clear()
         labelBounds.clear()
         labelGroupBounds.clear()
         edgeCurves.clear()
@@ -482,6 +517,7 @@ class GraphCanvas(
         }
 
         val groupVisuals = buildGroupVisuals(nodeBounds)
+        for (visual in groupVisuals) groupBoundsById[visual.group.id] = visual.bounds
         drawGroupBackgrounds(g, groupVisuals)
         drawGroupMemberConnections(g, groupVisuals)
         drawEdges(g, metrics, groupVisuals)
@@ -1090,6 +1126,12 @@ class GraphCanvas(
         val world = screenToWorld(screenPoint)
         val id = nodeBounds.entries.firstOrNull { it.value.contains(world) }?.key ?: return null
         return nodesById[id]
+    }
+
+    private fun groupAt(screenPoint: Point): OutgoingRelationGroup? {
+        val world = screenToWorld(screenPoint)
+        val groupId = groupBoundsById.entries.firstOrNull { (_, bounds) -> bounds.contains(world) }?.key ?: return null
+        return outgoingGroups.firstOrNull { group -> group.id == groupId }
     }
 
     private fun screenToWorld(point: Point): Point2D.Double = Point2D.Double(

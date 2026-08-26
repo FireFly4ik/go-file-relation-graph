@@ -47,6 +47,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>1.0.2</h3>
+        <ul>
+            <li>Lock files inside shared-output groups and move the complete group from a file or its frame.</li>
+            <li>Preserve parent-graph breadth-first hierarchy when wide levels are split into several rows.</li>
+            <li>Keep grouped members ordered by their individual incoming sources to reduce crossings.</li>
+        </ul>
         <h3>1.0.1</h3>
         <ul>
             <li>Group files on the same level when their outgoing relations are identical.</li>

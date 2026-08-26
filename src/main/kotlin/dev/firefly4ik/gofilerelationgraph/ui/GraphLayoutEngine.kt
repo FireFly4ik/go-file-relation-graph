@@ -281,27 +281,20 @@ object GraphLayoutEngine {
             .toMap()
             .takeIf { levelsById -> levelsById.size == nodeIds.size }
         val levels = if (explicitLevels != null) {
-            val widestLevel = explicitLevels.values.groupingBy { level -> level }.eachCount()
-                .maxOfOrNull(Map.Entry<Int, Int>::value)
-                ?: 0
-            if (widestLevel <= MAX_EXPLICIT_LEVEL_WIDTH) {
-                explicitLevels.toMutableMap()
-            } else {
-                val rankFromBottom = mutableMapOf<String, Int>()
-                val nodesPerRank = mutableMapOf<Int, Int>()
-                for (id in ordered.asReversed()) {
-                    var candidateRank = forwardOutgoing.getValue(id)
-                        .maxOfOrNull { target -> rankFromBottom.getValue(target) + 1 }
-                        ?: 0
-                    while (nodesPerRank.getOrDefault(candidateRank, 0) >= MAX_EXPLICIT_LEVEL_WIDTH) {
-                        candidateRank++
-                    }
-                    rankFromBottom[id] = candidateRank
-                    nodesPerRank[candidateRank] = nodesPerRank.getOrDefault(candidateRank, 0) + 1
+            val expanded = mutableMapOf<String, Int>()
+            var expandedLevel = 0
+            for ((_, ids) in nodeIds.groupBy(explicitLevels::getValue).toSortedMap()) {
+                val orderedIds = ids.sortedWith(
+                    compareBy<String>(siblingOrder::getValue)
+                        .thenBy(orderIndex::getValue)
+                        .thenBy(titleById::getValue),
+                )
+                for ((rowOffset, row) in orderedIds.chunked(MAX_EXPLICIT_LEVEL_WIDTH).withIndex()) {
+                    for (id in row) expanded[id] = expandedLevel + rowOffset
                 }
-                val maximumRank = rankFromBottom.values.maxOrNull() ?: 0
-                rankFromBottom.mapValuesTo(mutableMapOf()) { (_, rank) -> maximumRank - rank }
+                expandedLevel += (orderedIds.size + MAX_EXPLICIT_LEVEL_WIDTH - 1) / MAX_EXPLICIT_LEVEL_WIDTH
             }
+            expanded
         } else {
             val inferred = nodeIds.associateWith { 0 }.toMutableMap()
             for (source in ordered) {
