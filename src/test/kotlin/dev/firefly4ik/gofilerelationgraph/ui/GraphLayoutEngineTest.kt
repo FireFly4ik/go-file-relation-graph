@@ -21,10 +21,10 @@ class GraphLayoutEngineTest {
     }
 
     @Test
-    fun `adjacent levels include four additional pixels`() {
+    fun `adjacent levels use increased vertical spacing`() {
         val positions = GraphLayoutEngine.layout(snapshot("source.go" to "target.go"))
 
-        assertEquals(82.0, positions.getValue("target.go").y - positions.getValue("source.go").y)
+        assertEquals(93.5, positions.getValue("target.go").y - positions.getValue("source.go").y)
     }
 
     @Test
@@ -407,7 +407,7 @@ class GraphLayoutEngineTest {
 
         assertTrue(mainX.max() - mainX.min() < 0.1)
         assertTrue(smallX.max() - smallX.min() < 0.1)
-        assertTrue(mainRight + 43.0 <= smallLeft || smallRight + 43.0 <= mainLeft)
+        assertTrue(mainRight + 53.75 <= smallLeft || smallRight + 53.75 <= mainLeft)
     }
 
     private fun snapshot(vararg relations: Pair<String, String>): GraphSnapshot {

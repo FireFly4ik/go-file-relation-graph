@@ -43,6 +43,8 @@ class GraphCanvas(
 ) : JComponent() {
     private var snapshot = GraphSnapshot.EMPTY
     private var nodesById = emptyMap<String, FileNode>()
+    private var edgeKeysByNode = emptyMap<String, Set<Pair<String, String>>>()
+    private var edgeKeysByCallable = emptyMap<CallableRelation, Set<Pair<String, String>>>()
     private val positions = mutableMapOf<String, Point2D.Double>()
     private val targetPositions = mutableMapOf<String, Point2D.Double>()
     private val nodeBounds = mutableMapOf<String, Rectangle2D.Double>()
@@ -63,6 +65,8 @@ class GraphCanvas(
     private var pressedCallable: CallableRelation? = null
     private var hoveredCallable: CallableRelation? = null
     private var hoveredEdgeKey: Pair<String, String>? = null
+    private var highlightedNodeIds = emptySet<String>()
+    private var highlightedEdgeKeys = emptySet<Pair<String, String>>()
     private var hasDragged = false
     private var pendingInitialFit = false
     private var popupGestureStarted = false
@@ -172,14 +176,28 @@ class GraphCanvas(
             override fun mouseMoved(event: MouseEvent) {
                 lastPointerPoint = event.point
                 val hovered = callableAt(event.point)
-                val edgeKey = if (hovered == null) edgeAt(event.point) else null
-                if (hovered != hoveredCallable || edgeKey != hoveredEdgeKey) {
+                val hoveredNode = if (hovered == null) nodeAt(event.point) else null
+                val edgeKey = if (hovered == null && hoveredNode == null) edgeAt(event.point) else null
+                val edgeKeys = when {
+                    hovered != null -> edgeKeysByCallable[hovered].orEmpty()
+                    hoveredNode != null -> edgeKeysByNode[hoveredNode.id].orEmpty()
+                    edgeKey != null -> setOf(edgeKey)
+                    else -> emptySet()
+                }
+                val nodeIds = edgeKeys.flatMapTo(mutableSetOf()) { key -> listOf(key.first, key.second) }
+                if (hoveredNode != null) nodeIds += hoveredNode.id
+                if (
+                    hovered != hoveredCallable || edgeKey != hoveredEdgeKey ||
+                    edgeKeys != highlightedEdgeKeys || nodeIds != highlightedNodeIds
+                ) {
                     hoveredCallable = hovered
                     hoveredEdgeKey = edgeKey
+                    highlightedEdgeKeys = edgeKeys
+                    highlightedNodeIds = nodeIds
                     repaint()
                 }
                 cursor = Cursor.getPredefinedCursor(
-                    if (hovered != null || edgeKey != null || nodeAt(event.point) != null) {
+                    if (hovered != null || edgeKey != null || hoveredNode != null) {
                         Cursor.HAND_CURSOR
                     } else {
                         Cursor.DEFAULT_CURSOR
@@ -188,9 +206,14 @@ class GraphCanvas(
             }
 
             override fun mouseExited(event: MouseEvent) {
-                if (hoveredCallable != null || hoveredEdgeKey != null) {
+                if (
+                    hoveredCallable != null || hoveredEdgeKey != null ||
+                    highlightedNodeIds.isNotEmpty() || highlightedEdgeKeys.isNotEmpty()
+                ) {
                     hoveredCallable = null
                     hoveredEdgeKey = null
+                    highlightedNodeIds = emptySet()
+                    highlightedEdgeKeys = emptySet()
                     repaint()
                 }
             }
@@ -285,6 +308,26 @@ class GraphCanvas(
         val newActiveNode = value.nodes.firstOrNull { node -> node.id !in previousIds && node.isActive }
         snapshot = value
         nodesById = value.nodes.associateBy(FileNode::id)
+        val mutableEdgeKeysByNode = mutableMapOf<String, MutableSet<Pair<String, String>>>()
+        val mutableEdgeKeysByCallable = mutableMapOf<CallableRelation, MutableSet<Pair<String, String>>>()
+        for (edge in value.edges) {
+            val key = if (edge.sourceId <= edge.targetId) {
+                edge.sourceId to edge.targetId
+            } else {
+                edge.targetId to edge.sourceId
+            }
+            mutableEdgeKeysByNode.getOrPut(edge.sourceId, ::mutableSetOf) += key
+            mutableEdgeKeysByNode.getOrPut(edge.targetId, ::mutableSetOf) += key
+            for (callable in edge.callables) {
+                mutableEdgeKeysByCallable.getOrPut(callable, ::mutableSetOf) += key
+            }
+        }
+        edgeKeysByNode = mutableEdgeKeysByNode
+        edgeKeysByCallable = mutableEdgeKeysByCallable
+        hoveredCallable = null
+        hoveredEdgeKey = null
+        highlightedNodeIds = emptySet()
+        highlightedEdgeKeys = emptySet()
         val automatic = automaticLayout(value)
         val currentIds = value.nodes.mapTo(mutableSetOf()) { it.id }
         val structureChanged = previousSnapshot.nodes.mapTo(mutableSetOf()) { it.id } != currentIds ||
@@ -462,8 +505,7 @@ class GraphCanvas(
         edgeCurves += visualEdges.map { edge -> edge.curve to edge.key }
 
         for (edge in visualEdges) {
-            val highlighted = edge.key == hoveredEdgeKey ||
-                edge.callables.any { callable -> callable == hoveredCallable }
+            val highlighted = edge.key in highlightedEdgeKeys
             g.color = when {
                 edge.testRelation -> TEST_EDGE
                 edge.interfaceDispatch -> INTERFACE_EDGE
@@ -492,7 +534,7 @@ class GraphCanvas(
             .filter { edge -> !edge.testRelation && edge.callables.isNotEmpty() }
             .sortedWith(
                 compareByDescending<VisualEdge> { edge ->
-                    edge.key == hoveredEdgeKey || edge.callables.any { callable -> callable == hoveredCallable }
+                    edge.key in highlightedEdgeKeys
                 }.thenByDescending(VisualEdge::activeRelation)
                     .thenByDescending { edge -> edge.callables.size }
                     .thenByDescending(VisualEdge::interfaceDispatch)
@@ -507,8 +549,7 @@ class GraphCanvas(
             )
             if (plannedGroup != null) {
                 val plannedLabels = plannedGroup.labels
-                val highlighted = edge.key == hoveredEdgeKey ||
-                    edge.callables.any { callable -> callable == hoveredCallable }
+                val highlighted = edge.key in highlightedEdgeKeys
                 val groupBounds = Rectangle2D.Double(
                     plannedLabels.minOf { label -> label.bounds.minX },
                     plannedLabels.minOf { label -> label.bounds.minY },
@@ -714,14 +755,15 @@ class GraphCanvas(
             )
             return
         }
+        val highlighted = node.id in highlightedNodeIds
         g.color = when {
             node.isTest -> TEST_NODE_BACKGROUND
-            node.isActive -> ACTIVE_NODE_BACKGROUND
+            node.isActive || highlighted -> ACTIVE_NODE_BACKGROUND
             else -> NODE_BACKGROUND
         }
         g.fillRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
-        g.color = if (node.isActive) ACTIVE_NODE_BORDER else NODE_BORDER
-        g.stroke = BasicStroke(if (node.isActive) 1.8f else 1.0f)
+        g.color = if (node.isActive || highlighted) ACTIVE_NODE_BORDER else NODE_BORDER
+        g.stroke = BasicStroke(if (highlighted) 2.2f else if (node.isActive) 1.8f else 1.0f)
         g.drawRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
 
         val icon = if (node.isTest) GoIcons.TEST_RUN else node.file.fileType.icon

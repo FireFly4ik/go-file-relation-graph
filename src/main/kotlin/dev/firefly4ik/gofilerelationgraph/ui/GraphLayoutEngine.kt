@@ -7,9 +7,9 @@ import java.awt.Dimension
 import java.awt.geom.Point2D
 
 object GraphLayoutEngine {
-    private const val MIN_LEVEL_GAP = 42.0
-    private const val CROSS_GAP = 24.0
-    private const val COMPONENT_GAP = 43.0
+    private const val MIN_LEVEL_GAP = 52.5
+    private const val CROSS_GAP = 30.0
+    private const val COMPONENT_GAP = 53.75
 
     fun layout(
         snapshot: GraphSnapshot,
@@ -433,7 +433,7 @@ object GraphLayoutEngine {
                     }
                     .maxOrNull()
                     ?: 0.0
-                depth += previousHeight + maxOf(MIN_LEVEL_GAP, requiredGap) + 4.0
+                depth += previousHeight + maxOf(MIN_LEVEL_GAP, requiredGap) + LEVEL_PADDING
             }
             previousHeight = ids.maxOf { id -> sizes.getValue(id).height }.toDouble()
             val totalWidth = ids.sumOf(slotWidths::getValue) +
@@ -531,6 +531,7 @@ object GraphLayoutEngine {
     private const val BARYCENTER_PASSES = 4
     private const val COORDINATE_PASSES = 8
     private const val CORRIDOR_PASSES = 2
-    private const val MAX_EXTRA_CROSS_GAP = 72.0
-    private const val EDGE_CORRIDOR_GAP = 14.0
+    private const val MAX_EXTRA_CROSS_GAP = 90.0
+    private const val EDGE_CORRIDOR_GAP = 17.5
+    private const val LEVEL_PADDING = 5.0
 }
