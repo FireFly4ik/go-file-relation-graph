@@ -89,7 +89,7 @@ class ParentGraphPanel(
         loadingPanel.stopLoading()
         canvas.setSnapshot(result.snapshot)
         val notificationGroup = NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
-        if (result.snapshot.edges.none { edge -> edge.callables.isNotEmpty() }) {
+        if (result.snapshot.edges.isEmpty()) {
             notificationGroup.createNotification(
                 "No project parents found",
                 "The function may only be called by a library, generated code, reflection, or another Go module.",

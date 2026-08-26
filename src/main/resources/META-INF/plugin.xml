@@ -29,6 +29,7 @@
         <action
             id="dev.firefly4ik.gofilerelationgraph.BuildParentGraph"
             class="dev.firefly4ik.gofilerelationgraph.actions.BuildParentGraphAction"
+            icon="/icons/toolWindow.svg"
             text="Build Parent Graph"
             description="Build a graph of project functions that can call the function under the caret">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
