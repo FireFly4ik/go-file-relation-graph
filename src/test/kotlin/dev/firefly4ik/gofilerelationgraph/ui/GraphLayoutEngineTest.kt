@@ -226,6 +226,29 @@ class GraphLayoutEngineTest {
     }
 
     @Test
+    fun `explicit downward relations reduce crossings even when cycle breaking chooses reverse edges`() {
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("left-source.go", "left-source.go", LightVirtualFile("left-source.go"), false, layoutLevel = 0),
+                FileNode("right-source.go", "right-source.go", LightVirtualFile("right-source.go"), false, layoutLevel = 0),
+                FileNode("left-target.go", "left-target.go", LightVirtualFile("left-target.go"), false, layoutLevel = 1),
+                FileNode("right-target.go", "right-target.go", LightVirtualFile("right-target.go"), false, layoutLevel = 1),
+            ),
+            edges = listOf(
+                FileEdge("left-source.go", "right-target.go", emptyList()),
+                FileEdge("right-source.go", "left-target.go", emptyList()),
+                FileEdge("left-target.go", "left-source.go", emptyList()),
+                FileEdge("right-target.go", "right-source.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+
+        assertTrue(positions.getValue("left-source.go").x < positions.getValue("right-source.go").x)
+        assertTrue(positions.getValue("right-target.go").x < positions.getValue("left-target.go").x)
+    }
+
+    @Test
     fun `single chain stays aligned when neighboring branch is wider`() {
         val levels = mapOf(
             "left-top.go" to 0,
