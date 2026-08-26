@@ -151,7 +151,7 @@ class GraphLayoutEngineTest {
     }
 
     @Test
-    fun `large breadth first graph uses bounded layout optimization`() {
+    fun `large breadth first graph is split into readable rows`() {
         val parentIds = (1..60).map { index -> "parent-$index.go" }
         val snapshot = GraphSnapshot(
             nodes = listOf(
@@ -163,7 +163,40 @@ class GraphLayoutEngineTest {
         val positions = GraphLayoutEngine.layout(snapshot)
 
         assertEquals(61, positions.size)
-        assertEquals(1, parentIds.map { id -> positions.getValue(id).y }.distinct().size)
+        val parentRows = parentIds.groupBy { id -> positions.getValue(id).y }
+        assertTrue(parentRows.size > 1)
+        assertTrue(parentRows.values.all { ids -> ids.size <= 10 })
+        assertTrue(parentIds.all { id -> positions.getValue(id).y < positions.getValue("target.go").y })
+    }
+
+    @Test
+    fun `bounded parent rows keep ancestors above descendants`() {
+        val parentIds = (1..20).map { index -> "parent-$index.go" }
+        val grandParentIds = (1..20).map { index -> "grand-parent-$index.go" }
+        val nodes = listOf(
+            FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 2),
+        ) + parentIds.map { id ->
+            FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 1)
+        } + grandParentIds.map { id ->
+            FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 0)
+        }
+        val edges = parentIds.map { id -> FileEdge(id, "target.go", emptyList()) } +
+            parentIds.zip(grandParentIds).map { (parent, grandParent) ->
+                FileEdge(grandParent, parent, emptyList())
+            }
+
+        val positions = GraphLayoutEngine.layout(GraphSnapshot(nodes, edges))
+
+        for (edge in edges) {
+            assertTrue(
+                positions.getValue(edge.sourceId).y < positions.getValue(edge.targetId).y,
+                "${edge.sourceId} must stay above ${edge.targetId}",
+            )
+        }
+        assertTrue(
+            (parentIds + grandParentIds).groupBy { id -> positions.getValue(id).y }
+                .values.all { ids -> ids.size <= 10 },
+        )
     }
 
     @Test

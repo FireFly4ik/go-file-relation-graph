@@ -44,12 +44,23 @@ class ParentGraphAnalyzer(
     private val maxParentFiles: Int = DEFAULT_MAX_PARENT_FILES,
     private val maxLevels: Int = DEFAULT_MAX_LEVELS,
 ) {
+    private val pointerManager = SmartPointerManager.getInstance(project)
+    private val psiDocumentManager = PsiDocumentManager.getInstance(project)
+    private val fileDocumentManager = FileDocumentManager.getInstance()
+    private val projectFileIndex = ProjectFileIndex.getInstance(project)
+    private val moduleRoots = mutableMapOf<VirtualFile, VirtualFile?>()
+
     fun findGoModuleRoot(file: VirtualFile): VirtualFile? {
+        if (file in moduleRoots) return moduleRoots[file]
         var directory = file.parent
         while (directory != null) {
-            if (directory.findChild("go.mod")?.isDirectory == false) return directory
+            if (directory.findChild("go.mod")?.isDirectory == false) {
+                moduleRoots[file] = directory
+                return directory
+            }
             directory = directory.parent
         }
+        moduleRoots[file] = null
         return null
     }
 
@@ -60,12 +71,13 @@ class ParentGraphAnalyzer(
         val scope = GlobalSearchScope.projectScope(project).intersectWith(
             GlobalSearchScopesCore.directoryScope(project, moduleRoot, true),
         )
-        val pointerManager = SmartPointerManager.getInstance(project)
         val nodes = linkedMapOf<String, FileNode>()
         val accumulated = linkedMapOf<CallableKey, MutableCallable>()
         val navigationTargets = mutableMapOf<String, LinkedHashMap<DeclarationKey, FileNavigationTarget>>()
         val queue = ArrayDeque<QueueEntry>()
         val visited = mutableSetOf<DeclarationKey>()
+        val enqueued = mutableSetOf<DeclarationKey>()
+        val eligibility = mutableMapOf<VirtualFile, Boolean>()
         val acceptedParentPaths = mutableSetOf<String>()
         val fileDistances = mutableMapOf(anchorFile.virtualFile.path to 0)
         val truncatedTargets = mutableSetOf<String>()
@@ -74,8 +86,9 @@ class ParentGraphAnalyzer(
 
         nodes[anchorFile.virtualFile.path] = fileNode(anchorFile, true)
         val anchorKey = declarationKey(anchor)
-        addNavigationTarget(navigationTargets, anchor, anchorKey, pointerManager)
-        queue += QueueEntry(anchor, 1, setOf(anchorKey))
+        addNavigationTarget(navigationTargets, anchor, anchorKey)
+        enqueued += anchorKey
+        queue += QueueEntry(anchor, 1, ParentPath(anchorKey, null))
 
         search@ while (queue.isNotEmpty()) {
             ProgressManager.checkCanceled()
@@ -91,6 +104,7 @@ class ParentGraphAnalyzer(
                 scope = scope,
                 moduleRoot = moduleRoot,
                 includeTests = includeTests,
+                eligibility = eligibility,
                 result = usages,
             )
             if (current.declaration is GoMethodDeclaration) {
@@ -99,6 +113,7 @@ class ParentGraphAnalyzer(
                     scope = scope,
                     moduleRoot = moduleRoot,
                     includeTests = includeTests,
+                    eligibility = eligibility,
                     result = usages,
                 )
             }
@@ -109,7 +124,9 @@ class ParentGraphAnalyzer(
             ))) {
                 ProgressManager.checkCanceled()
                 val parentKey = declarationKey(usage.parent)
-                if (parentKey in current.ancestors) continue
+                var path: ParentPath? = current.path
+                while (path != null && path.key != parentKey) path = path.previous
+                if (path != null) continue
                 val parentFile = usage.parent.containingFile
                 val parentPath = parentFile.virtualFile.path
                 val targetPath = current.declaration.containingFile.virtualFile.path
@@ -128,11 +145,11 @@ class ParentGraphAnalyzer(
                 if (isNewParentFile) acceptedParentPaths += parentPath
                 fileDistances.merge(parentPath, parentLevel - 1, ::minOf)
                 nodes.putIfAbsent(parentPath, fileNode(parentFile, false))
-                addNavigationTarget(navigationTargets, usage.parent, parentKey, pointerManager)
+                addNavigationTarget(navigationTargets, usage.parent, parentKey)
 
                 if (parentPath != targetPath) {
-                    val document = PsiDocumentManager.getInstance(project).getDocument(parentFile)
-                        ?: FileDocumentManager.getInstance().getDocument(parentFile.virtualFile)
+                    val document = psiDocumentManager.getDocument(parentFile)
+                        ?: fileDocumentManager.getDocument(parentFile.virtualFile)
                     val label = callableLabel(current.declaration)
                     val interfacePath = usage.parentInterface?.containingFile?.virtualFile?.path
                     val key = CallableKey(
@@ -150,11 +167,11 @@ class ParentGraphAnalyzer(
                             parentInterface = usage.parentInterface?.let(pointerManager::createSmartPsiElementPointer),
                         )
                     }
-                    relation.callSites += callSite(usage.usage, document, pointerManager)
+                    relation.callSites += callSite(usage.usage, document)
                 }
 
-                if (parentKey !in visited) {
-                    val next = QueueEntry(usage.parent, parentLevel, current.ancestors + parentKey)
+                if (parentKey !in visited && enqueued.add(parentKey)) {
+                    val next = QueueEntry(usage.parent, parentLevel, ParentPath(parentKey, current.path))
                     if (parentLevel == current.level) queue.addFirst(next) else queue.addLast(next)
                 }
             }
@@ -228,6 +245,7 @@ class ParentGraphAnalyzer(
         scope: GlobalSearchScope,
         moduleRoot: VirtualFile,
         includeTests: Boolean,
+        eligibility: MutableMap<VirtualFile, Boolean>,
         result: MutableList<ParentUsage>,
     ) {
         val name = target.name ?: return
@@ -235,7 +253,7 @@ class ParentGraphAnalyzer(
         val fingerprint = "$name/$parameterCount"
         GoMethodSpecFingerprintIndex.process(fingerprint, project, scope) { methodSpec ->
             ProgressManager.checkCanceled()
-            if (!isEligible(methodSpec.containingFile, moduleRoot, includeTests)) return@process true
+            if (!isEligible(methodSpec.containingFile, moduleRoot, includeTests, eligibility)) return@process true
             var implementsMethod = false
             DefinitionsScopedSearch.search(methodSpec, scope, true).forEach(Processor { implementation ->
                 ProgressManager.checkCanceled()
@@ -256,6 +274,7 @@ class ParentGraphAnalyzer(
                     scope = scope,
                     moduleRoot = moduleRoot,
                     includeTests = includeTests,
+                    eligibility = eligibility,
                     result = result,
                 )
             }
@@ -270,13 +289,14 @@ class ParentGraphAnalyzer(
         scope: GlobalSearchScope,
         moduleRoot: VirtualFile,
         includeTests: Boolean,
+        eligibility: MutableMap<VirtualFile, Boolean>,
         result: MutableList<ParentUsage>,
     ) {
         ReferencesSearch.search(target, scope).forEach(Processor { reference ->
             ProgressManager.checkCanceled()
             val element = reference.element
             val sourceFile = element.containingFile as? GoFile ?: return@Processor true
-            if (!isEligible(sourceFile, moduleRoot, includeTests)) return@Processor true
+            if (!isEligible(sourceFile, moduleRoot, includeTests, eligibility)) return@Processor true
             val parent = PsiTreeUtil.getParentOfType(
                 element,
                 GoFunctionOrMethodDeclaration::class.java,
@@ -301,13 +321,21 @@ class ParentGraphAnalyzer(
         })
     }
 
-    private fun isEligible(file: GoFile?, moduleRoot: VirtualFile, includeTests: Boolean): Boolean {
+    private fun isEligible(
+        file: GoFile?,
+        moduleRoot: VirtualFile,
+        includeTests: Boolean,
+        eligibility: MutableMap<VirtualFile, Boolean>,
+    ): Boolean {
         if (file == null || file.isGenerated) return false
-        if (!includeTests && file.name.endsWith("_test.go")) return false
-        if (!ProjectFileIndex.getInstance(project).isInContent(file.virtualFile)) return false
-        if (findGoModuleRoot(file.virtualFile) != moduleRoot) return false
-        val relativePath = VfsUtilCore.getRelativePath(file.virtualFile, moduleRoot, '/') ?: return false
-        return relativePath.split('/').none { component -> component == "vendor" }
+        return eligibility.getOrPut(file.virtualFile) {
+            if (!includeTests && file.name.endsWith("_test.go")) return@getOrPut false
+            if (!projectFileIndex.isInContent(file.virtualFile)) return@getOrPut false
+            if (findGoModuleRoot(file.virtualFile) != moduleRoot) return@getOrPut false
+            val relativePath = VfsUtilCore.getRelativePath(file.virtualFile, moduleRoot, '/')
+                ?: return@getOrPut false
+            relativePath.split('/').none { component -> component == "vendor" }
+        }
     }
 
     private fun fileNode(file: GoFile, active: Boolean) = FileNode(
@@ -328,11 +356,10 @@ class ParentGraphAnalyzer(
         targets: MutableMap<String, LinkedHashMap<DeclarationKey, FileNavigationTarget>>,
         declaration: GoFunctionOrMethodDeclaration,
         key: DeclarationKey,
-        pointerManager: SmartPointerManager,
     ) {
         val file = declaration.containingFile
-        val document = PsiDocumentManager.getInstance(project).getDocument(file)
-            ?: FileDocumentManager.getInstance().getDocument(file.virtualFile)
+        val document = psiDocumentManager.getDocument(file)
+            ?: fileDocumentManager.getDocument(file.virtualFile)
         val lineNumber = (document?.getLineNumber(declaration.textOffset) ?: 0) + 1
         targets.getOrPut(file.virtualFile.path, ::linkedMapOf).putIfAbsent(
             key,
@@ -352,7 +379,6 @@ class ParentGraphAnalyzer(
     private fun callSite(
         usage: PsiElement,
         document: Document?,
-        pointerManager: SmartPointerManager,
     ): CallSite {
         val line = document?.getLineNumber(usage.textOffset) ?: 0
         val lineText = if (document == null) {
@@ -373,7 +399,12 @@ class ParentGraphAnalyzer(
     private data class QueueEntry(
         val declaration: GoFunctionOrMethodDeclaration,
         val level: Int,
-        val ancestors: Set<DeclarationKey>,
+        val path: ParentPath,
+    )
+
+    private data class ParentPath(
+        val key: DeclarationKey,
+        val previous: ParentPath?,
     )
 
     private data class ParentUsage(

@@ -42,6 +42,7 @@ class GraphCanvas(
     private val navigator: GraphNavigator,
 ) : JComponent() {
     private var snapshot = GraphSnapshot.EMPTY
+    private var nodesById = emptyMap<String, FileNode>()
     private val positions = mutableMapOf<String, Point2D.Double>()
     private val targetPositions = mutableMapOf<String, Point2D.Double>()
     private val nodeBounds = mutableMapOf<String, Rectangle2D.Double>()
@@ -77,6 +78,7 @@ class GraphCanvas(
 
     private val animationTimer = Timer(16, null)
     private val resizeTimer = Timer(120) { fitGraph() }.apply { isRepeats = false }
+    private val detailRestoreTimer = Timer(120) { repaint() }.apply { isRepeats = false }
     private val mouseWheelZoomTimer = Timer(70) {
         if (System.currentTimeMillis() >= touchpadWheelSuppressedUntil && pendingWheelZoomFactor != 1.0) {
             zoomAt(pendingWheelZoomAnchor, targetScale * pendingWheelZoomFactor)
@@ -137,6 +139,7 @@ class GraphCanvas(
                     targetOffsetY = offsetY
                 }
                 lastMousePoint = event.point
+                if (isLargeGraph) detailRestoreTimer.restart()
                 repaint()
             }
 
@@ -162,6 +165,8 @@ class GraphCanvas(
                 lastMousePoint = null
                 cursor = Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
                 popupGestureStarted = false
+                if (detailRestoreTimer.isRunning) detailRestoreTimer.stop()
+                repaint()
             }
 
             override fun mouseMoved(event: MouseEvent) {
@@ -207,6 +212,7 @@ class GraphCanvas(
                         targetOffsetY = offsetY
                     }
                     event.consume()
+                    if (isLargeGraph) detailRestoreTimer.restart()
                     repaint()
                     return
                 }
@@ -269,8 +275,8 @@ class GraphCanvas(
             offsetY = targetOffsetY
         }
 
-        repaint()
         if (!moving) animationTimer.stop()
+        repaint()
     }
 
     fun setSnapshot(value: GraphSnapshot) {
@@ -278,6 +284,7 @@ class GraphCanvas(
         val previousIds = positions.keys.toSet()
         val newActiveNode = value.nodes.firstOrNull { node -> node.id !in previousIds && node.isActive }
         snapshot = value
+        nodesById = value.nodes.associateBy(FileNode::id)
         val automatic = automaticLayout(value)
         val currentIds = value.nodes.mapTo(mutableSetOf()) { it.id }
         val structureChanged = previousSnapshot.nodes.mapTo(mutableSetOf()) { it.id } != currentIds ||
@@ -348,6 +355,7 @@ class GraphCanvas(
         snapshot = snapshot.copy(
             nodes = snapshot.nodes.map { node -> node.copy(isActive = node.id in paths) },
         )
+        nodesById = snapshot.nodes.associateBy(FileNode::id)
         repaint()
     }
 
@@ -411,7 +419,6 @@ class GraphCanvas(
     }
 
     private fun drawEdges(g: Graphics2D, metrics: FontMetrics) {
-        val nodesById = snapshot.nodes.associateBy(FileNode::id)
         val visualEdges = snapshot.edges.groupBy { edge ->
             if (edge.sourceId <= edge.targetId) {
                 edge.sourceId to edge.targetId
@@ -480,7 +487,7 @@ class GraphCanvas(
             if (edge.bidirectional) drawArrowHead(g, edge.source, !edge.downward)
         }
 
-        if (!showLabels) return
+        if (!showLabels || isLargeGraph && (animationTimer.isRunning || detailRestoreTimer.isRunning)) return
         val labelEdges = visualEdges
             .filter { edge -> !edge.testRelation && edge.callables.isNotEmpty() }
             .sortedWith(
@@ -497,8 +504,6 @@ class GraphCanvas(
                 metrics = metrics,
                 callables = edge.callables,
                 curve = edge.curve,
-                foreignCurves = visualEdges.asSequence().filter { candidate -> candidate !== edge }
-                    .map(VisualEdge::curve).toList(),
             )
             if (plannedGroup != null) {
                 val plannedLabels = plannedGroup.labels
@@ -550,7 +555,6 @@ class GraphCanvas(
         metrics: FontMetrics,
         callables: List<CallableRelation>,
         curve: CubicCurve2D.Double,
-        foreignCurves: List<CubicCurve2D.Double>,
     ): PlannedLabelGroup? {
         if (callables.isEmpty()) return null
         val normalHeight = metrics.height + 6.0
@@ -630,10 +634,7 @@ class GraphCanvas(
                                 groupBounds.width + nodeGap * 2,
                                 groupBounds.height + nodeGap * 2,
                             )
-                            if (
-                                labelGroupBounds.none(protectedGroupBounds::intersects) &&
-                                foreignCurves.none { foreignCurve -> foreignCurve.intersects(protectedGroupBounds) }
-                            ) {
+                            if (labelGroupBounds.none(protectedGroupBounds::intersects)) {
                                 return PlannedLabelGroup(group, anchor)
                             }
                         }
@@ -798,6 +799,16 @@ class GraphCanvas(
         val world = screenToWorld(screenPoint)
         val tolerance = JBUI.scale(6).toDouble() / scale
         for ((curve, key) in edgeCurves.asReversed()) {
+            val bounds = curve.bounds2D
+            if (!Rectangle2D.Double(
+                    bounds.x - tolerance,
+                    bounds.y - tolerance,
+                    bounds.width + tolerance * 2,
+                    bounds.height + tolerance * 2,
+                ).contains(world)
+            ) {
+                continue
+            }
             val iterator = curve.getPathIterator(null, 1.0)
             val coordinates = DoubleArray(6)
             var previousX = 0.0
@@ -835,7 +846,7 @@ class GraphCanvas(
     private fun nodeAt(screenPoint: Point): FileNode? {
         val world = screenToWorld(screenPoint)
         val id = nodeBounds.entries.firstOrNull { it.value.contains(world) }?.key ?: return null
-        return snapshot.nodes.firstOrNull { it.id == id }
+        return nodesById[id]
     }
 
     private fun screenToWorld(point: Point): Point2D.Double = Point2D.Double(
@@ -859,6 +870,9 @@ class GraphCanvas(
     private fun startAnimation() {
         if (!animationTimer.isRunning) animationTimer.start()
     }
+
+    private val isLargeGraph: Boolean
+        get() = snapshot.nodes.size > 36 || snapshot.edges.size > 72
 
     private data class PlannedCallableLabel(
         val bounds: Rectangle2D.Double,

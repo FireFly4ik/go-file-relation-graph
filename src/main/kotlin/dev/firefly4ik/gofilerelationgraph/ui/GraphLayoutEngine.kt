@@ -101,15 +101,20 @@ object GraphLayoutEngine {
         val nodeIds = snapshot.nodes.mapTo(linkedSetOf()) { it.id }
         val titleById = snapshot.nodes.associate { it.id to it.title }
         val testById = snapshot.nodes.associate { it.id to it.isTest }
+        val validEdges = snapshot.edges.filter { edge ->
+            edge.sourceId in nodeIds && edge.targetId in nodeIds
+        }
+        val incomingEdges = validEdges.groupBy(FileEdge::targetId)
+        val outgoingEdges = validEdges.groupBy(FileEdge::sourceId)
         val siblingOrder = nodeIds.associateWith { id ->
-            val allIncoming = snapshot.edges.filter { edge -> edge.targetId == id }
+            val allIncoming = incomingEdges[id].orEmpty()
             val preferredIncoming = if (testById[id] == false) {
                 allIncoming.filter { edge -> testById[edge.sourceId] == false }.ifEmpty { allIncoming }
             } else {
                 allIncoming
             }
             val ranks = preferredIncoming.map { incomingEdge ->
-                snapshot.edges.filter { candidate ->
+                outgoingEdges[incomingEdge.sourceId].orEmpty().filter { candidate ->
                     candidate.sourceId == incomingEdge.sourceId &&
                         (testById[id] == true || testById[candidate.targetId] == false)
                 }
@@ -121,8 +126,7 @@ object GraphLayoutEngine {
         val outgoing = nodeIds.associateWith { mutableListOf<String>() }
         val incoming = nodeIds.associateWith { mutableListOf<String>() }
         val weights = mutableMapOf<Pair<String, String>, Int>()
-        for (edge in snapshot.edges) {
-            if (edge.sourceId !in nodeIds || edge.targetId !in nodeIds) continue
+        for (edge in validEdges) {
             if (edge.targetId !in outgoing.getValue(edge.sourceId)) {
                 outgoing.getValue(edge.sourceId) += edge.targetId
                 incoming.getValue(edge.targetId) += edge.sourceId
@@ -179,7 +183,27 @@ object GraphLayoutEngine {
             .toMap()
             .takeIf { levelsById -> levelsById.size == nodeIds.size }
         val levels = if (explicitLevels != null) {
-            explicitLevels.toMutableMap()
+            val widestLevel = explicitLevels.values.groupingBy { level -> level }.eachCount()
+                .maxOfOrNull(Map.Entry<Int, Int>::value)
+                ?: 0
+            if (widestLevel <= MAX_EXPLICIT_LEVEL_WIDTH) {
+                explicitLevels.toMutableMap()
+            } else {
+                val rankFromBottom = mutableMapOf<String, Int>()
+                val nodesPerRank = mutableMapOf<Int, Int>()
+                for (id in ordered.asReversed()) {
+                    var candidateRank = forwardOutgoing.getValue(id)
+                        .maxOfOrNull { target -> rankFromBottom.getValue(target) + 1 }
+                        ?: 0
+                    while (nodesPerRank.getOrDefault(candidateRank, 0) >= MAX_EXPLICIT_LEVEL_WIDTH) {
+                        candidateRank++
+                    }
+                    rankFromBottom[id] = candidateRank
+                    nodesPerRank[candidateRank] = nodesPerRank.getOrDefault(candidateRank, 0) + 1
+                }
+                val maximumRank = rankFromBottom.values.maxOrNull() ?: 0
+                rankFromBottom.mapValuesTo(mutableMapOf()) { (_, rank) -> maximumRank - rank }
+            }
         } else {
             val inferred = nodeIds.associateWith { 0 }.toMutableMap()
             for (source in ordered) {
@@ -208,23 +232,29 @@ object GraphLayoutEngine {
         val rank = mutableMapOf<String, Double>()
         for (ids in byLevel.values) ids.forEachIndexed { index, id -> rank[id] = index.toDouble() }
 
-        for ((_, ids) in byLevel) {
-            ids.sortWith(compareBy<String> { id ->
-                val allParents = forwardIncoming.getValue(id)
-                val preferredParents = if (testById[id] == false) {
-                    allParents.filter { parent -> testById[parent] == false }.ifEmpty { allParents }
-                } else {
-                    allParents
-                }
-                preferredParents.mapNotNull(rank::get).average().takeUnless(Double::isNaN)
-                    ?: rank.getValue(id)
-            }.thenBy(siblingOrder::getValue).thenBy(titleById::getValue))
-            ids.forEachIndexed { index, id -> rank[id] = index.toDouble() }
+        repeat(BARYCENTER_PASSES) { pass ->
+            val levelsToOrder = if (pass % 2 == 0) byLevel.values else byLevel.values.reversed()
+            for (ids in levelsToOrder) {
+                ids.sortWith(compareBy<String> { id ->
+                    val allNeighbors = if (pass % 2 == 0) {
+                        forwardIncoming.getValue(id)
+                    } else {
+                        forwardOutgoing.getValue(id)
+                    }
+                    val preferredNeighbors = if (testById[id] == false) {
+                        allNeighbors.filter { neighbor -> testById[neighbor] == false }.ifEmpty { allNeighbors }
+                    } else {
+                        allNeighbors
+                    }
+                    preferredNeighbors.mapNotNull(rank::get).average().takeUnless(Double::isNaN)
+                        ?: rank.getValue(id)
+                }.thenBy(siblingOrder::getValue).thenBy(titleById::getValue))
+                ids.forEachIndexed { index, id -> rank[id] = index.toDouble() }
+            }
         }
 
-        val forwardEdges = snapshot.edges.filter { edge ->
-            edge.sourceId in nodeIds && edge.targetId in nodeIds &&
-                orderIndex.getValue(edge.sourceId) < orderIndex.getValue(edge.targetId)
+        val forwardEdges = validEdges.filter { edge ->
+            orderIndex.getValue(edge.sourceId) < orderIndex.getValue(edge.targetId)
         }
         val productionEdges = forwardEdges.filter { edge ->
             testById[edge.sourceId] == false && testById[edge.targetId] == false
@@ -343,8 +373,10 @@ object GraphLayoutEngine {
         val outgoingAtLevelCount = snapshot.edges.groupingBy { edge ->
             edge.sourceId to levels[edge.targetId]
         }.eachCount()
-        val edgesByNode = nodeIds.associateWith { id ->
-            snapshot.edges.filter { edge -> edge.sourceId == id || edge.targetId == id }
+        val edgesByNode = nodeIds.associateWith { mutableListOf<FileEdge>() }
+        for (edge in validEdges) {
+            edgesByNode.getValue(edge.sourceId) += edge
+            if (edge.targetId != edge.sourceId) edgesByNode.getValue(edge.targetId) += edge
         }
         val labelFootprints = nodeIds.associateWith { id ->
             edgesByNode.getValue(id)
@@ -426,4 +458,6 @@ object GraphLayoutEngine {
 
     private const val MAX_OPTIMIZED_NODES = 36
     private const val MAX_OPTIMIZED_EDGES = 72
+    private const val MAX_EXPLICIT_LEVEL_WIDTH = 10
+    private const val BARYCENTER_PASSES = 4
 }
