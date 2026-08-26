@@ -43,8 +43,10 @@ class GraphCanvas(
 ) : JComponent() {
     private var snapshot = GraphSnapshot.EMPTY
     private var nodesById = emptyMap<String, FileNode>()
+    private var outgoingGroups = emptyList<OutgoingRelationGroup>()
     private var edgeKeysByNode = emptyMap<String, Set<Pair<String, String>>>()
     private var edgeKeysByCallable = emptyMap<CallableRelation, Set<Pair<String, String>>>()
+    private var nodeIdsByEdgeKey = emptyMap<Pair<String, String>, Set<String>>()
     private val positions = mutableMapOf<String, Point2D.Double>()
     private val targetPositions = mutableMapOf<String, Point2D.Double>()
     private val nodeBounds = mutableMapOf<String, Rectangle2D.Double>()
@@ -184,7 +186,7 @@ class GraphCanvas(
                     edgeKey != null -> setOf(edgeKey)
                     else -> emptySet()
                 }
-                val nodeIds = edgeKeys.flatMapTo(mutableSetOf()) { key -> listOf(key.first, key.second) }
+                val nodeIds = edgeKeys.flatMapTo(mutableSetOf()) { key -> nodeIdsByEdgeKey[key].orEmpty() }
                 if (hoveredNode != null) nodeIds += hoveredNode.id
                 if (
                     hovered != hoveredCallable || edgeKey != hoveredEdgeKey ||
@@ -304,26 +306,47 @@ class GraphCanvas(
 
     fun setSnapshot(value: GraphSnapshot) {
         val previousSnapshot = snapshot
+        val previousGroups = outgoingGroups
         val previousIds = positions.keys.toSet()
         val newActiveNode = value.nodes.firstOrNull { node -> node.id !in previousIds && node.isActive }
         snapshot = value
         nodesById = value.nodes.associateBy(FileNode::id)
+        outgoingGroups = OutgoingRelationGroups.find(value)
         val mutableEdgeKeysByNode = mutableMapOf<String, MutableSet<Pair<String, String>>>()
         val mutableEdgeKeysByCallable = mutableMapOf<CallableRelation, MutableSet<Pair<String, String>>>()
-        for (edge in value.edges) {
+        val mutableNodeIdsByEdgeKey = mutableMapOf<Pair<String, String>, Set<String>>()
+        val groupedSourceEdges = outgoingGroups.flatMapTo(hashSetOf()) { group ->
+            group.sharedRelations.flatMap(SharedOutgoingRelation::sourceEdges)
+        }
+        for (edge in value.edges.filterNot(groupedSourceEdges::contains)) {
             val key = if (edge.sourceId <= edge.targetId) {
                 edge.sourceId to edge.targetId
             } else {
                 edge.targetId to edge.sourceId
             }
+            mutableNodeIdsByEdgeKey[key] = setOf(edge.sourceId, edge.targetId)
             mutableEdgeKeysByNode.getOrPut(edge.sourceId, ::mutableSetOf) += key
             mutableEdgeKeysByNode.getOrPut(edge.targetId, ::mutableSetOf) += key
             for (callable in edge.callables) {
                 mutableEdgeKeysByCallable.getOrPut(callable, ::mutableSetOf) += key
             }
         }
+        for (group in outgoingGroups) {
+            for (relation in group.sharedRelations) {
+                val key = group.id to relation.targetId
+                val connectedNodeIds = group.memberIds.toSet() + relation.targetId
+                mutableNodeIdsByEdgeKey[key] = connectedNodeIds
+                for (nodeId in connectedNodeIds) {
+                    mutableEdgeKeysByNode.getOrPut(nodeId, ::mutableSetOf) += key
+                }
+                for (callable in relation.callables) {
+                    mutableEdgeKeysByCallable.getOrPut(callable, ::mutableSetOf) += key
+                }
+            }
+        }
         edgeKeysByNode = mutableEdgeKeysByNode
         edgeKeysByCallable = mutableEdgeKeysByCallable
+        nodeIdsByEdgeKey = mutableNodeIdsByEdgeKey
         hoveredCallable = null
         hoveredEdgeKey = null
         highlightedNodeIds = emptySet()
@@ -332,7 +355,9 @@ class GraphCanvas(
         val currentIds = value.nodes.mapTo(mutableSetOf()) { it.id }
         val structureChanged = previousSnapshot.nodes.mapTo(mutableSetOf()) { it.id } != currentIds ||
             previousSnapshot.edges.map { edge -> edge.sourceId to edge.targetId } !=
-            value.edges.map { edge -> edge.sourceId to edge.targetId }
+            value.edges.map { edge -> edge.sourceId to edge.targetId } ||
+            previousGroups.map { group -> group.id to group.memberIds } !=
+            outgoingGroups.map { group -> group.id to group.memberIds }
         positions.keys.retainAll(currentIds)
         targetPositions.keys.retainAll(currentIds)
 
@@ -456,13 +481,20 @@ class GraphCanvas(
             )
         }
 
-        drawEdges(g, metrics)
+        val groupVisuals = buildGroupVisuals(nodeBounds)
+        drawGroupBackgrounds(g, groupVisuals)
+        drawGroupMemberConnections(g, groupVisuals)
+        drawEdges(g, metrics, groupVisuals)
+        drawGroupCollectors(g, groupVisuals)
         for (node in snapshot.nodes) drawNode(g, metrics, node)
         g.dispose()
     }
 
-    private fun drawEdges(g: Graphics2D, metrics: FontMetrics) {
-        val visualEdges = snapshot.edges.groupBy { edge ->
+    private fun drawEdges(g: Graphics2D, metrics: FontMetrics, groupVisuals: List<GroupVisual>) {
+        val groupedSourceEdges = outgoingGroups.flatMapTo(hashSetOf()) { group ->
+            group.sharedRelations.flatMap(SharedOutgoingRelation::sourceEdges)
+        }
+        val visualEdges = snapshot.edges.filterNot(groupedSourceEdges::contains).groupBy { edge ->
             if (edge.sourceId <= edge.targetId) {
                 edge.sourceId to edge.targetId
             } else {
@@ -501,6 +533,41 @@ class GraphCanvas(
                 order = pairedEdges.minOf(FileEdge::order),
                 callables = callables,
             )
+        }.toMutableList()
+        val groupVisualsById = groupVisuals.associateBy { visual -> visual.group.id }
+        for (group in outgoingGroups) {
+            val groupVisual = groupVisualsById[group.id] ?: continue
+            for (relation in group.sharedRelations) {
+                val target = nodeBounds[relation.targetId] ?: continue
+                val source = Rectangle2D.Double(
+                    groupVisual.collector.x - 1.0,
+                    groupVisual.collector.y - 1.0,
+                    2.0,
+                    2.0,
+                )
+                val downward = target.centerY >= source.centerY
+                val x1 = source.centerX
+                val y1 = source.centerY
+                val x2 = target.centerX
+                val y2 = if (downward) target.minY else target.maxY
+                val middle = (y1 + y2) / 2.0
+                visualEdges += VisualEdge(
+                    key = group.id to relation.targetId,
+                    source = source,
+                    target = target,
+                    curve = CubicCurve2D.Double(x1, y1, x1, middle, x2, middle, x2, y2),
+                    downward = downward,
+                    bidirectional = false,
+                    interfaceDispatch = relation.callables.any(CallableRelation::isInterfaceDispatch),
+                    callbackArgument = relation.callables.any(CallableRelation::isCallbackArgument),
+                    testRelation = group.memberIds.any { memberId -> nodesById[memberId]?.isTest == true } ||
+                        nodesById[relation.targetId]?.isTest == true,
+                    activeRelation = group.memberIds.any { memberId -> nodesById[memberId]?.isActive == true } ||
+                        nodesById[relation.targetId]?.isActive == true,
+                    order = relation.order,
+                    callables = relation.callables,
+                )
+            }
         }
         edgeCurves += visualEdges.map { edge -> edge.curve to edge.key }
 
@@ -577,6 +644,98 @@ class GraphCanvas(
                 }
                 labelGroupBounds += groupBounds
             }
+        }
+    }
+
+    private fun buildGroupVisuals(boundsByNode: Map<String, Rectangle2D.Double>): List<GroupVisual> =
+        outgoingGroups.mapNotNull { group ->
+            val memberBounds = group.memberIds.mapNotNull(boundsByNode::get)
+            if (memberBounds.size != group.memberIds.size) return@mapNotNull null
+            val minX = memberBounds.minOf(Rectangle2D.Double::getMinX)
+            val maxX = memberBounds.maxOf(Rectangle2D.Double::getMaxX)
+            val minY = memberBounds.minOf(Rectangle2D.Double::getMinY)
+            val maxY = memberBounds.maxOf(Rectangle2D.Double::getMaxY)
+            val bounds = Rectangle2D.Double(
+                minX - OutgoingRelationGroups.HORIZONTAL_INSET,
+                minY - OutgoingRelationGroups.TOP_INSET,
+                maxX - minX + OutgoingRelationGroups.HORIZONTAL_INSET * 2,
+                maxY - minY + OutgoingRelationGroups.TOP_INSET + OutgoingRelationGroups.BOTTOM_INSET,
+            )
+            GroupVisual(
+                group = group,
+                bounds = bounds,
+                collector = Point2D.Double(bounds.centerX, maxY + OutgoingRelationGroups.BOTTOM_INSET / 2.0),
+            )
+        }
+
+    private fun drawGroupBackgrounds(g: Graphics2D, groupVisuals: List<GroupVisual>) {
+        val previousFont = g.font
+        for (visual in groupVisuals) {
+            val highlighted = visual.group.memberIds.any { memberId -> memberId in highlightedNodeIds }
+            g.color = GROUP_BACKGROUND
+            g.fillRoundRect(
+                visual.bounds.x.toInt(),
+                visual.bounds.y.toInt(),
+                visual.bounds.width.toInt(),
+                visual.bounds.height.toInt(),
+                14,
+                14,
+            )
+            g.color = if (highlighted) HOVER_NODE_BORDER else GROUP_BORDER
+            g.stroke = BasicStroke(
+                if (highlighted) 1.8f else 1.0f,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND,
+                10f,
+                floatArrayOf(3f, 5f),
+                0f,
+            )
+            g.drawRoundRect(
+                visual.bounds.x.toInt(),
+                visual.bounds.y.toInt(),
+                visual.bounds.width.toInt(),
+                visual.bounds.height.toInt(),
+                14,
+                14,
+            )
+            g.font = previousFont.deriveFont(max(9f, previousFont.size2D - 2f))
+            g.color = GROUP_TEXT
+            g.drawString(
+                "${visual.group.memberIds.size} files · shared outgoing",
+                (visual.bounds.x + 10.0).toFloat(),
+                (visual.bounds.y + 16.0).toFloat(),
+            )
+        }
+        g.font = previousFont
+    }
+
+    private fun drawGroupMemberConnections(g: Graphics2D, groupVisuals: List<GroupVisual>) {
+        for (visual in groupVisuals) {
+            val sharedKeys = visual.group.sharedRelations.mapTo(hashSetOf()) { relation ->
+                visual.group.id to relation.targetId
+            }
+            val highlighted = sharedKeys.any(highlightedEdgeKeys::contains)
+            g.color = if (highlighted) HOVER_NODE_BORDER else GROUP_CONNECTION
+            g.stroke = BasicStroke(if (highlighted) 2.2f else 1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            for (memberId in visual.group.memberIds) {
+                val memberBounds = nodeBounds[memberId] ?: continue
+                val bendY = visual.collector.y - 8.0
+                val path = Path2D.Double()
+                path.moveTo(memberBounds.centerX, memberBounds.maxY)
+                path.lineTo(memberBounds.centerX, bendY)
+                path.quadTo(memberBounds.centerX, visual.collector.y, visual.collector.x, visual.collector.y)
+                g.draw(path)
+            }
+        }
+    }
+
+    private fun drawGroupCollectors(g: Graphics2D, groupVisuals: List<GroupVisual>) {
+        for (visual in groupVisuals) {
+            val highlighted = visual.group.sharedRelations.any { relation ->
+                visual.group.id to relation.targetId in highlightedEdgeKeys
+            }
+            g.color = if (highlighted) HOVER_NODE_BORDER else GROUP_COLLECTOR
+            g.fill(Ellipse2D.Double(visual.collector.x - 4.0, visual.collector.y - 4.0, 8.0, 8.0))
         }
     }
 
@@ -809,14 +968,31 @@ class GraphCanvas(
         var minY = Double.POSITIVE_INFINITY
         var maxX = Double.NEGATIVE_INFINITY
         var maxY = Double.NEGATIVE_INFINITY
+        val boundsByNode = mutableMapOf<String, Rectangle2D.Double>()
         for ((id, point) in points) {
             val size = nodesById[id]?.let { nodeSize(it, metrics) } ?: Dimension(220, 42)
+            boundsByNode[id] = Rectangle2D.Double(
+                point.x - size.width / 2.0,
+                point.y,
+                size.width.toDouble(),
+                size.height.toDouble(),
+            )
             minX = min(minX, point.x - size.width / 2.0)
             minY = min(minY, point.y)
             maxX = max(maxX, point.x + size.width / 2.0)
             maxY = max(maxY, point.y + size.height)
         }
-        for (edge in snapshot.edges) {
+        val groupVisuals = buildGroupVisuals(boundsByNode)
+        for (visual in groupVisuals) {
+            minX = min(minX, visual.bounds.minX)
+            minY = min(minY, visual.bounds.minY)
+            maxX = max(maxX, visual.bounds.maxX)
+            maxY = max(maxY, visual.bounds.maxY)
+        }
+        val groupedSourceEdges = outgoingGroups.flatMapTo(hashSetOf()) { group ->
+            group.sharedRelations.flatMap(SharedOutgoingRelation::sourceEdges)
+        }
+        for (edge in snapshot.edges.filterNot(groupedSourceEdges::contains)) {
             if (nodesById[edge.sourceId]?.isTest == true || nodesById[edge.targetId]?.isTest == true) continue
             val source = points[edge.sourceId] ?: continue
             val target = points[edge.targetId] ?: continue
@@ -832,6 +1008,27 @@ class GraphCanvas(
             maxX = max(maxX, centerX + labelWidth / 2.0)
             minY = min(minY, min(source.y + sourceSize.height, target.y + targetSize.height))
             maxY = max(maxY, max(source.y, target.y))
+        }
+        val groupVisualsById = groupVisuals.associateBy { visual -> visual.group.id }
+        for (group in outgoingGroups) {
+            val source = groupVisualsById[group.id]?.collector ?: continue
+            for (relation in group.sharedRelations) {
+                if (
+                    group.memberIds.any { memberId -> nodesById[memberId]?.isTest == true } ||
+                    nodesById[relation.targetId]?.isTest == true
+                ) {
+                    continue
+                }
+                val target = points[relation.targetId] ?: continue
+                val labelWidth = relation.callables.maxOfOrNull { callable ->
+                    metrics.stringWidth(callable.label) + 18.0
+                } ?: continue
+                val centerX = (source.x + target.x) / 2.0
+                minX = min(minX, centerX - labelWidth / 2.0)
+                maxX = max(maxX, centerX + labelWidth / 2.0)
+                minY = min(minY, min(source.y, target.y))
+                maxY = max(maxY, max(source.y, target.y))
+            }
         }
         return Rectangle2D.Double(minX, minY, max(1.0, maxX - minX), max(1.0, maxY - minY))
     }
@@ -931,6 +1128,12 @@ class GraphCanvas(
         val anchor: Point2D.Double,
     )
 
+    private data class GroupVisual(
+        val group: OutgoingRelationGroup,
+        val bounds: Rectangle2D.Double,
+        val collector: Point2D.Double,
+    )
+
     private data class VisualEdge(
         val key: Pair<String, String>,
         val source: Rectangle2D.Double,
@@ -951,6 +1154,11 @@ class GraphCanvas(
         private val NODE_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.node", JBColor(0xFFFFFF, 0x2B2D30))
         private val ACTIVE_NODE_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.nodeActive", JBColor(0xEAF2FF, 0x2D3F63))
         private val TEST_NODE_BACKGROUND = JBColor.namedColor("FileColor.Green", JBColor(0xE7F4E8, 0x29402F))
+        private val GROUP_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.group", JBColor(0xF1F3F7, 0x24262B))
+        private val GROUP_BORDER = JBColor.namedColor("GoFileRelationGraph.groupBorder", JBColor(0xA8ACB5, 0x4D5058))
+        private val GROUP_TEXT = JBColor.namedColor("GoFileRelationGraph.groupText", JBColor(0x6C707E, 0x9DA0A8))
+        private val GROUP_CONNECTION = JBColor.namedColor("GoFileRelationGraph.groupConnection", JBColor(0x8B8D94, 0x656870))
+        private val GROUP_COLLECTOR = JBColor.namedColor("GoFileRelationGraph.groupCollector", JBColor(0x7A5AF8, 0xA78BFA))
         private val NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeBorder", JBColor(0xB8BCC4, 0x5A5D63))
         private val ACTIVE_NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeActiveBorder", JBColor(0x3574F0, 0x548AF7))
         private val HOVER_NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeHoverBorder", JBColor(0x6C707E, 0xFFFFFF))

@@ -13,6 +13,8 @@ method selected in the editor.
 - Dashed purple relations are calls dispatched through an interface.
 - Passing a function or method as a value also creates a relation.
 - Opposite relations between the same two files share one line with arrows at both ends.
+- Files on the same level with identical outgoing relations form a visual group: incoming arrows
+  still reach each file, while repeated outgoing arrows share one collector and one set of labels.
 - Files called earlier by the same parent are placed further left on their level.
 - Click a file tile to open the file.
 - Click a callable label to open its implementation.
@@ -37,6 +39,7 @@ editor context menu. A new closable `Parents: …` tab is added next to the perm
 - Cycles are not drawn in the current version.
 - Click a file tile to open its only participating function, or choose a function when the file contains several.
 - Parent tabs are snapshots. Use **Refresh Parent Graph** to rebuild one; tabs are not restored after restart.
+- Parent snapshots use the same identical-outgoing-relation grouping as the open-files graph.
 
 For example, passing a method as a callback produces a direct visible parent relation without a
 tile for the registration helper:

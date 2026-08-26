@@ -4,6 +4,7 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.psi.SmartPointerManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
+import dev.firefly4ik.gofilerelationgraph.model.CallSite
 import dev.firefly4ik.gofilerelationgraph.model.CallableRelation
 import dev.firefly4ik.gofilerelationgraph.model.FileEdge
 import dev.firefly4ik.gofilerelationgraph.model.FileNode
@@ -11,12 +12,98 @@ import dev.firefly4ik.gofilerelationgraph.model.GraphSnapshot
 import dev.firefly4ik.gofilerelationgraph.navigation.GraphNavigator
 import java.awt.event.InputEvent
 import java.awt.event.MouseEvent
+import java.awt.geom.CubicCurve2D
 import java.awt.geom.Rectangle2D
 import java.awt.image.BufferedImage
 import javax.swing.Timer
 import javax.swing.UIManager
 
 class GraphCanvasTest : BasePlatformTestCase() {
+    fun testIdenticalOutgoingRelationsUseSharedOutputAndKeepIndividualInputs() {
+        val parentA = myFixture.addFileToProject("parent_a.go", "package main\n\nfunc ParentA() {}")
+        val parentB = myFixture.addFileToProject("parent_b.go", "package main\n\nfunc ParentB() {}")
+        val sourceA = myFixture.addFileToProject("source_a.go", "package main\n\nfunc SourceA() { Search() }")
+        val sourceB = myFixture.addFileToProject("source_b.go", "package main\n\nfunc SourceB() { Search() }")
+        val target = myFixture.addFileToProject("target.go", "package main\n\nfunc Search() {}")
+        val pointerManager = SmartPointerManager.getInstance(project)
+        val targetElement = target.findElementAt(target.text.indexOf("Search"))
+            ?: error("target element was not created")
+        val targetPointer = pointerManager.createSmartPsiElementPointer(targetElement)
+        val sourceACall = sourceA.findElementAt(sourceA.text.lastIndexOf("Search"))
+            ?: error("first call element was not created")
+        val sourceBCall = sourceB.findElementAt(sourceB.text.lastIndexOf("Search"))
+            ?: error("second call element was not created")
+        val relationA = CallableRelation(
+            label = "gateway.Search()",
+            target = targetPointer,
+            callSites = listOf(
+                CallSite(3, "func SourceA() { Search() }", pointerManager.createSmartPsiElementPointer(sourceACall)),
+            ),
+            parentInterface = null,
+        )
+        val relationB = relationA.copy(
+            callSites = listOf(
+                CallSite(3, "func SourceB() { Search() }", pointerManager.createSmartPsiElementPointer(sourceBCall)),
+            ),
+        )
+        val incomingA = relationA.copy(label = "ParentA()", callSites = emptyList())
+        val incomingB = relationA.copy(label = "ParentB()", callSites = emptyList())
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("parent-a", "parent_a.go", parentA.virtualFile, false, layoutLevel = 0),
+                FileNode("parent-b", "parent_b.go", parentB.virtualFile, false, layoutLevel = 0),
+                FileNode("source-a", "source_a.go", sourceA.virtualFile, false, layoutLevel = 1),
+                FileNode("source-b", "source_b.go", sourceB.virtualFile, false, layoutLevel = 1),
+                FileNode("target", "target.go", target.virtualFile, false, layoutLevel = 2),
+            ),
+            edges = listOf(
+                FileEdge("parent-a", "source-a", listOf(incomingA)),
+                FileEdge("parent-b", "source-b", listOf(incomingB)),
+                FileEdge("source-a", "target", listOf(relationA)),
+                FileEdge("source-b", "target", listOf(relationB)),
+            ),
+        )
+
+        val group = OutgoingRelationGroups.find(snapshot).single()
+        assertEquals(listOf("source-a", "source-b"), group.memberIds)
+        assertEquals(2, group.sharedRelations.single().callables.single().callSites.size)
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+        assertEquals(positions.getValue("source-a").y, positions.getValue("source-b").y)
+        assertTrue(positions.getValue("source-a").x < positions.getValue("source-b").x)
+
+        val canvas = GraphCanvas(GraphNavigator(project)).apply {
+            font = UIManager.getFont("Label.font")
+            setSize(900, 600)
+            setSnapshot(snapshot)
+        }
+        for (name in listOf("scale", "offsetX", "offsetY")) {
+            val current = GraphCanvas::class.java.getDeclaredField(name).apply { isAccessible = true }
+            val targetField = GraphCanvas::class.java.getDeclaredField(
+                when (name) {
+                    "scale" -> "targetScale"
+                    "offsetX" -> "targetOffsetX"
+                    else -> "targetOffsetY"
+                },
+            ).apply { isAccessible = true }
+            current.setDouble(canvas, targetField.getDouble(canvas))
+        }
+        GraphCanvas::class.java.getDeclaredField("animationTimer").apply { isAccessible = true }
+            .get(canvas).let { it as Timer }.stop()
+        canvas.paint(BufferedImage(900, 600, BufferedImage.TYPE_INT_ARGB).graphics)
+
+        @Suppress("UNCHECKED_CAST")
+        val curves = GraphCanvas::class.java.getDeclaredField("edgeCurves").apply { isAccessible = true }
+            .get(canvas) as List<Pair<CubicCurve2D.Double, Pair<String, String>>>
+        assertEquals(3, curves.size)
+        @Suppress("UNCHECKED_CAST")
+        val bounds = GraphCanvas::class.java.getDeclaredField("nodeBounds").apply { isAccessible = true }
+            .get(canvas) as Map<String, Rectangle2D.Double>
+        val incomingCurve = curves.single { (_, key) -> key == "parent-a" to "source-a" }.first
+        assertEquals(bounds.getValue("source-a").centerX, incomingCurve.x2, 0.01)
+        assertEquals(bounds.getValue("source-a").minY, incomingCurve.y2, 0.01)
+    }
+
     fun testLimitPlaceholderEdgeWithoutCallablesPaints() {
         val target = myFixture.addFileToProject("target.go", "package main\n\nfunc target() {}")
         val canvas = GraphCanvas(GraphNavigator(project)).apply {

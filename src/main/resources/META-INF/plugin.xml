@@ -47,6 +47,13 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>1.0.1</h3>
+        <ul>
+            <li>Group files on the same level when their outgoing relations are identical.</li>
+            <li>Keep incoming arrows attached to each concrete file while sharing repeated outgoing arrows and labels.</li>
+            <li>Support shared-output groups in both the live open-files graph and parent-call graphs.</li>
+            <li>Highlight all grouped sources and their target when hovering a shared relation.</li>
+        </ul>
         <h3>1.0.0</h3>
         <p>First stable release of Go File Relation Graph.</p>
         <ul>

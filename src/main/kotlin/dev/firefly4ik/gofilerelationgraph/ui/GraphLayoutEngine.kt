@@ -19,6 +19,104 @@ object GraphLayoutEngine {
         edgeLabelWidth: (dev.firefly4ik.gofilerelationgraph.model.FileEdge) -> Double = { 0.0 },
         nodeSize: (FileNode) -> Dimension = { Dimension(132, 36) },
     ): Map<String, Point2D.Double> {
+        val groups = OutgoingRelationGroups.find(snapshot)
+        if (groups.isEmpty()) {
+            return layoutUngrouped(snapshot, labelHeight, labelNodeGap, labelGap, edgeLabelWidth, nodeSize)
+        }
+
+        val nodesById = snapshot.nodes.associateBy(FileNode::id)
+        val memberToGroup = groups.flatMap { group ->
+            group.memberIds.map { memberId -> memberId to group }
+        }.toMap()
+        val groupedSourceEdges = groups.flatMapTo(hashSetOf()) { group ->
+            group.sharedRelations.flatMap(SharedOutgoingRelation::sourceEdges)
+        }
+        val groupSizes = groups.associate { group ->
+            val memberSizes = group.memberIds.map { memberId -> nodeSize(nodesById.getValue(memberId)) }
+            val width = memberSizes.sumOf(Dimension::getWidth) +
+                OutgoingRelationGroups.MEMBER_GAP * (memberSizes.size - 1) +
+                OutgoingRelationGroups.HORIZONTAL_INSET * 2
+            val height = memberSizes.maxOf(Dimension::getHeight) +
+                OutgoingRelationGroups.TOP_INSET + OutgoingRelationGroups.BOTTOM_INSET
+            group.id to Dimension(width.toInt(), height.toInt())
+        }
+        val macroNodes = snapshot.nodes.filterNot { node -> node.id in memberToGroup } + groups.map { group ->
+            val members = group.memberIds.map(nodesById::getValue)
+            members.first().copy(
+                id = group.id,
+                title = members.minOf(FileNode::title),
+                isActive = members.any(FileNode::isActive),
+                navigationTargets = emptyList(),
+            )
+        }
+        val macroEdges = snapshot.edges.asSequence()
+            .filterNot(groupedSourceEdges::contains)
+            .mapNotNull { edge ->
+                val sourceId = memberToGroup[edge.sourceId]?.id ?: edge.sourceId
+                val targetId = memberToGroup[edge.targetId]?.id ?: edge.targetId
+                if (sourceId == targetId) null else edge.copy(sourceId = sourceId, targetId = targetId)
+            }
+            .toMutableList()
+        for (group in groups) {
+            for (relation in group.sharedRelations) {
+                val targetId = memberToGroup[relation.targetId]?.id ?: relation.targetId
+                if (group.id != targetId) {
+                    macroEdges += FileEdge(group.id, targetId, relation.callables, relation.order)
+                }
+            }
+        }
+        val macroSnapshot = GraphSnapshot(macroNodes, macroEdges)
+        val macroPositions = layoutUngrouped(
+            snapshot = macroSnapshot,
+            labelHeight = labelHeight,
+            labelNodeGap = labelNodeGap,
+            labelGap = labelGap,
+            edgeLabelWidth = edgeLabelWidth,
+            nodeSize = { node -> groupSizes[node.id] ?: nodeSize(node) },
+        )
+
+        val result = macroPositions
+            .filterKeys { id -> id !in groupSizes }
+            .mapValuesTo(mutableMapOf()) { (_, point) -> Point2D.Double(point.x, point.y) }
+        val incomingEdges = snapshot.edges.groupBy(FileEdge::targetId)
+        for (group in groups) {
+            val groupPosition = macroPositions.getValue(group.id)
+            val orderedMembers = group.memberIds.sortedWith(
+                compareBy<String> { memberId ->
+                    incomingEdges[memberId].orEmpty()
+                        .mapNotNull { edge ->
+                            val sourceId = memberToGroup[edge.sourceId]?.id ?: edge.sourceId
+                            macroPositions[sourceId]?.x
+                        }
+                        .average()
+                        .takeUnless(Double::isNaN)
+                        ?: groupPosition.x
+                }.thenBy { memberId -> nodesById.getValue(memberId).title },
+            )
+            val memberSizes = orderedMembers.associateWith { memberId -> nodeSize(nodesById.getValue(memberId)) }
+            val contentWidth = memberSizes.values.sumOf(Dimension::getWidth) +
+                OutgoingRelationGroups.MEMBER_GAP * (orderedMembers.size - 1)
+            var cursor = groupPosition.x - contentWidth / 2.0
+            for (memberId in orderedMembers) {
+                val size = memberSizes.getValue(memberId)
+                result[memberId] = Point2D.Double(
+                    cursor + size.width / 2.0,
+                    groupPosition.y + OutgoingRelationGroups.TOP_INSET,
+                )
+                cursor += size.width + OutgoingRelationGroups.MEMBER_GAP
+            }
+        }
+        return result
+    }
+
+    private fun layoutUngrouped(
+        snapshot: GraphSnapshot,
+        labelHeight: Double,
+        labelNodeGap: Double,
+        labelGap: Double,
+        edgeLabelWidth: (dev.firefly4ik.gofilerelationgraph.model.FileEdge) -> Double,
+        nodeSize: (FileNode) -> Dimension,
+    ): Map<String, Point2D.Double> {
         if (snapshot.nodes.isEmpty()) return emptyMap()
 
         val allNodeIds = snapshot.nodes.mapTo(linkedSetOf()) { it.id }
@@ -49,7 +147,7 @@ object GraphLayoutEngine {
                     edge.sourceId in component && edge.targetId in component
                 }
                 val componentSnapshot = GraphSnapshot(componentNodes, componentEdges)
-                val points = layout(
+                val points = layoutUngrouped(
                     snapshot = componentSnapshot,
                     labelHeight = labelHeight,
                     labelNodeGap = labelNodeGap,

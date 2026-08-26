@@ -7,11 +7,33 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.firefly4ik.gofilerelationgraph.model.RelationKind
+import dev.firefly4ik.gofilerelationgraph.ui.OutgoingRelationGroups
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ParentGraphAnalyzerTest : BasePlatformTestCase() {
+    fun testGroupsParentFilesWithIdenticalOutgoingRelations() {
+        myFixture.addFileToProject("go.mod", "module example.com/sample")
+        val targetFile = myFixture.addFileToProject("target.go", "package sample\nfunc Target() {}")
+        myFixture.addFileToProject("first.go", "package sample\nfunc First() { Target() }")
+        myFixture.addFileToProject("second.go", "package sample\nfunc Second() { Target() }")
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val anchor = PsiTreeUtil.findChildOfType(targetFile, GoFunctionOrMethodDeclaration::class.java)
+            ?: error("anchor function was not created")
+
+        val result = ApplicationManager.getApplication().runReadAction<ParentGraphResult> {
+            ParentGraphAnalyzer(project).analyze(anchor, includeTests = false)
+        }
+        val group = OutgoingRelationGroups.find(result.snapshot).single()
+
+        assertEquals(setOf("first.go", "second.go"), group.memberIds.mapTo(mutableSetOf()) { memberId ->
+            result.snapshot.nodes.single { node -> node.id == memberId }.file.name
+        })
+        assertEquals("Target()", group.sharedRelations.single().callables.single().label)
+        assertEquals(2, group.sharedRelations.single().callables.single().callSites.size)
+    }
+
     fun testBuildsParentsThroughSameFileCallsAndCallbackArguments() {
         myFixture.addFileToProject("go.mod", "module example.com/sample")
         val targetFile = myFixture.addFileToProject(
