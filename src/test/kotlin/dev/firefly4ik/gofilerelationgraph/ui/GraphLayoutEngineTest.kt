@@ -21,10 +21,10 @@ class GraphLayoutEngineTest {
     }
 
     @Test
-    fun `adjacent levels include four additional pixels`() {
+    fun `adjacent levels use increased vertical spacing`() {
         val positions = GraphLayoutEngine.layout(snapshot("source.go" to "target.go"))
 
-        assertEquals(82.0, positions.getValue("target.go").y - positions.getValue("source.go").y)
+        assertEquals(93.5, positions.getValue("target.go").y - positions.getValue("source.go").y)
     }
 
     @Test
@@ -124,6 +124,133 @@ class GraphLayoutEngineTest {
         val positions = GraphLayoutEngine.layout(snapshot)
 
         assertTrue(positions.getValue("first.go").x < positions.getValue("second.go").x)
+    }
+
+    @Test
+    fun `explicit breadth first levels keep all direct parents on one row`() {
+        val nodes = listOf(
+            FileNode("root.go", "root.go", LightVirtualFile("root.go"), false, layoutLevel = 2),
+            FileNode("first.go", "first.go", LightVirtualFile("first.go"), false, layoutLevel = 1),
+            FileNode("second.go", "second.go", LightVirtualFile("second.go"), false, layoutLevel = 1),
+            FileNode("deep.go", "deep.go", LightVirtualFile("deep.go"), false, layoutLevel = 0),
+        )
+        val snapshot = GraphSnapshot(
+            nodes = nodes,
+            edges = listOf(
+                FileEdge("first.go", "root.go", emptyList()),
+                FileEdge("second.go", "root.go", emptyList()),
+                FileEdge("deep.go", "first.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+
+        assertEquals(positions.getValue("first.go").y, positions.getValue("second.go").y)
+        assertTrue(positions.getValue("deep.go").y < positions.getValue("first.go").y)
+        assertTrue(positions.getValue("first.go").y < positions.getValue("root.go").y)
+    }
+
+    @Test
+    fun `large breadth first graph is split into readable rows`() {
+        val parentIds = (1..60).map { index -> "parent-$index.go" }
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 1),
+            ) + parentIds.map { id -> FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 0) },
+            edges = parentIds.map { id -> FileEdge(id, "target.go", emptyList()) },
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+
+        assertEquals(61, positions.size)
+        val parentRows = parentIds.groupBy { id -> positions.getValue(id).y }
+        assertTrue(parentRows.size > 1)
+        assertTrue(parentRows.values.all { ids -> ids.size <= 10 })
+        assertTrue(parentIds.all { id -> positions.getValue(id).y < positions.getValue("target.go").y })
+    }
+
+    @Test
+    fun `bounded parent rows keep ancestors above descendants`() {
+        val parentIds = (1..20).map { index -> "parent-$index.go" }
+        val grandParentIds = (1..20).map { index -> "grand-parent-$index.go" }
+        val nodes = listOf(
+            FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 2),
+        ) + parentIds.map { id ->
+            FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 1)
+        } + grandParentIds.map { id ->
+            FileNode(id, id, LightVirtualFile(id), false, layoutLevel = 0)
+        }
+        val edges = parentIds.map { id -> FileEdge(id, "target.go", emptyList()) } +
+            parentIds.zip(grandParentIds).map { (parent, grandParent) ->
+                FileEdge(grandParent, parent, emptyList())
+            }
+
+        val positions = GraphLayoutEngine.layout(GraphSnapshot(nodes, edges))
+
+        for (edge in edges) {
+            assertTrue(
+                positions.getValue(edge.sourceId).y < positions.getValue(edge.targetId).y,
+                "${edge.sourceId} must stay above ${edge.targetId}",
+            )
+        }
+        assertTrue(
+            (parentIds + grandParentIds).groupBy { id -> positions.getValue(id).y }
+                .values.all { ids -> ids.size <= 10 },
+        )
+    }
+
+    @Test
+    fun `single chain stays aligned when neighboring branch is wider`() {
+        val levels = mapOf(
+            "left-top.go" to 0,
+            "chain-top.go" to 0,
+            "left-middle-first.go" to 1,
+            "left-middle-second.go" to 1,
+            "chain-middle.go" to 1,
+            "left-bottom.go" to 2,
+            "chain-bottom.go" to 2,
+        )
+        val snapshot = GraphSnapshot(
+            nodes = levels.map { (id, level) ->
+                FileNode(id, id, LightVirtualFile(id), false, layoutLevel = level)
+            },
+            edges = listOf(
+                FileEdge("left-top.go", "left-middle-first.go", emptyList()),
+                FileEdge("left-top.go", "left-middle-second.go", emptyList()),
+                FileEdge("left-middle-first.go", "left-bottom.go", emptyList()),
+                FileEdge("left-middle-second.go", "left-bottom.go", emptyList()),
+                FileEdge("chain-top.go", "chain-middle.go", emptyList()),
+                FileEdge("chain-middle.go", "chain-bottom.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+        val chainCenter = (
+            positions.getValue("chain-top.go").x + positions.getValue("chain-bottom.go").x
+            ) / 2.0
+
+        assertTrue(kotlin.math.abs(positions.getValue("chain-middle.go").x - chainCenter) <= 40.0)
+    }
+
+    @Test
+    fun `intermediate file leaves a corridor for a direct long relation`() {
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("source.go", "source.go", LightVirtualFile("source.go"), false, layoutLevel = 0),
+                FileNode("middle.go", "middle.go", LightVirtualFile("middle.go"), false, layoutLevel = 1),
+                FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 2),
+            ),
+            edges = listOf(
+                FileEdge("source.go", "target.go", emptyList()),
+                FileEdge("source.go", "middle.go", emptyList()),
+                FileEdge("middle.go", "target.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+        val directCorridorX = (positions.getValue("source.go").x + positions.getValue("target.go").x) / 2.0
+
+        assertTrue(kotlin.math.abs(positions.getValue("middle.go").x - directCorridorX) >= 80.0)
     }
 
     @Test
@@ -280,7 +407,7 @@ class GraphLayoutEngineTest {
 
         assertTrue(mainX.max() - mainX.min() < 0.1)
         assertTrue(smallX.max() - smallX.min() < 0.1)
-        assertTrue(mainRight + 43.0 <= smallLeft || smallRight + 43.0 <= mainLeft)
+        assertTrue(mainRight + 53.75 <= smallLeft || smallRight + 53.75 <= mainLeft)
     }
 
     private fun snapshot(vararg relations: Pair<String, String>): GraphSnapshot {

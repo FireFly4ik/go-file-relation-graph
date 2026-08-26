@@ -19,6 +19,15 @@ data class FileNode(
     val file: VirtualFile,
     val isActive: Boolean,
     val isTest: Boolean = false,
+    val isPlaceholder: Boolean = false,
+    val navigationTargets: List<FileNavigationTarget> = emptyList(),
+    val layoutLevel: Int? = null,
+)
+
+data class FileNavigationTarget(
+    val label: String,
+    val lineNumber: Int,
+    val pointer: SmartPsiElementPointer<out PsiElement>,
 )
 
 data class FileEdge(
@@ -33,9 +42,19 @@ data class CallableRelation(
     val target: SmartPsiElementPointer<out PsiElement>,
     val callSites: List<CallSite>,
     val parentInterface: SmartPsiElementPointer<out PsiElement>?,
+    val kind: RelationKind = if (parentInterface == null) RelationKind.DIRECT else RelationKind.INTERFACE,
 ) {
     val isInterfaceDispatch: Boolean
-        get() = parentInterface != null
+        get() = kind == RelationKind.INTERFACE
+
+    val isCallbackArgument: Boolean
+        get() = kind == RelationKind.CALLBACK_ARGUMENT
+}
+
+enum class RelationKind {
+    DIRECT,
+    INTERFACE,
+    CALLBACK_ARGUMENT,
 }
 
 data class CallSite(

@@ -42,6 +42,9 @@ class GraphCanvas(
     private val navigator: GraphNavigator,
 ) : JComponent() {
     private var snapshot = GraphSnapshot.EMPTY
+    private var nodesById = emptyMap<String, FileNode>()
+    private var edgeKeysByNode = emptyMap<String, Set<Pair<String, String>>>()
+    private var edgeKeysByCallable = emptyMap<CallableRelation, Set<Pair<String, String>>>()
     private val positions = mutableMapOf<String, Point2D.Double>()
     private val targetPositions = mutableMapOf<String, Point2D.Double>()
     private val nodeBounds = mutableMapOf<String, Rectangle2D.Double>()
@@ -62,6 +65,8 @@ class GraphCanvas(
     private var pressedCallable: CallableRelation? = null
     private var hoveredCallable: CallableRelation? = null
     private var hoveredEdgeKey: Pair<String, String>? = null
+    private var highlightedNodeIds = emptySet<String>()
+    private var highlightedEdgeKeys = emptySet<Pair<String, String>>()
     private var hasDragged = false
     private var pendingInitialFit = false
     private var popupGestureStarted = false
@@ -77,6 +82,7 @@ class GraphCanvas(
 
     private val animationTimer = Timer(16, null)
     private val resizeTimer = Timer(120) { fitGraph() }.apply { isRepeats = false }
+    private val detailRestoreTimer = Timer(120) { repaint() }.apply { isRepeats = false }
     private val mouseWheelZoomTimer = Timer(70) {
         if (System.currentTimeMillis() >= touchpadWheelSuppressedUntil && pendingWheelZoomFactor != 1.0) {
             zoomAt(pendingWheelZoomAnchor, targetScale * pendingWheelZoomFactor)
@@ -137,6 +143,7 @@ class GraphCanvas(
                     targetOffsetY = offsetY
                 }
                 lastMousePoint = event.point
+                if (isLargeGraph) detailRestoreTimer.restart()
                 repaint()
             }
 
@@ -151,7 +158,9 @@ class GraphCanvas(
                     when {
                         callable != null && event.isShiftDown -> navigator.openCallSites(callable, this@GraphCanvas, event.point)
                         callable != null -> navigator.openTarget(callable)
-                        else -> nodeAt(event.point)?.let { navigator.openFile(it.file) }
+                        else -> nodeAt(event.point)?.takeUnless(FileNode::isPlaceholder)?.let { node ->
+                            navigator.openNode(node, this@GraphCanvas, event.point)
+                        }
                     }
                 }
                 pressedCallable = null
@@ -160,19 +169,35 @@ class GraphCanvas(
                 lastMousePoint = null
                 cursor = Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
                 popupGestureStarted = false
+                if (detailRestoreTimer.isRunning) detailRestoreTimer.stop()
+                repaint()
             }
 
             override fun mouseMoved(event: MouseEvent) {
                 lastPointerPoint = event.point
                 val hovered = callableAt(event.point)
-                val edgeKey = if (hovered == null) edgeAt(event.point) else null
-                if (hovered != hoveredCallable || edgeKey != hoveredEdgeKey) {
+                val hoveredNode = if (hovered == null) nodeAt(event.point) else null
+                val edgeKey = if (hovered == null && hoveredNode == null) edgeAt(event.point) else null
+                val edgeKeys = when {
+                    hovered != null -> edgeKeysByCallable[hovered].orEmpty()
+                    hoveredNode != null -> edgeKeysByNode[hoveredNode.id].orEmpty()
+                    edgeKey != null -> setOf(edgeKey)
+                    else -> emptySet()
+                }
+                val nodeIds = edgeKeys.flatMapTo(mutableSetOf()) { key -> listOf(key.first, key.second) }
+                if (hoveredNode != null) nodeIds += hoveredNode.id
+                if (
+                    hovered != hoveredCallable || edgeKey != hoveredEdgeKey ||
+                    edgeKeys != highlightedEdgeKeys || nodeIds != highlightedNodeIds
+                ) {
                     hoveredCallable = hovered
                     hoveredEdgeKey = edgeKey
+                    highlightedEdgeKeys = edgeKeys
+                    highlightedNodeIds = nodeIds
                     repaint()
                 }
                 cursor = Cursor.getPredefinedCursor(
-                    if (hovered != null || edgeKey != null || nodeAt(event.point) != null) {
+                    if (hovered != null || edgeKey != null || hoveredNode != null) {
                         Cursor.HAND_CURSOR
                     } else {
                         Cursor.DEFAULT_CURSOR
@@ -181,9 +206,14 @@ class GraphCanvas(
             }
 
             override fun mouseExited(event: MouseEvent) {
-                if (hoveredCallable != null || hoveredEdgeKey != null) {
+                if (
+                    hoveredCallable != null || hoveredEdgeKey != null ||
+                    highlightedNodeIds.isNotEmpty() || highlightedEdgeKeys.isNotEmpty()
+                ) {
                     hoveredCallable = null
                     hoveredEdgeKey = null
+                    highlightedNodeIds = emptySet()
+                    highlightedEdgeKeys = emptySet()
                     repaint()
                 }
             }
@@ -205,6 +235,7 @@ class GraphCanvas(
                         targetOffsetY = offsetY
                     }
                     event.consume()
+                    if (isLargeGraph) detailRestoreTimer.restart()
                     repaint()
                     return
                 }
@@ -267,8 +298,8 @@ class GraphCanvas(
             offsetY = targetOffsetY
         }
 
-        repaint()
         if (!moving) animationTimer.stop()
+        repaint()
     }
 
     fun setSnapshot(value: GraphSnapshot) {
@@ -276,6 +307,27 @@ class GraphCanvas(
         val previousIds = positions.keys.toSet()
         val newActiveNode = value.nodes.firstOrNull { node -> node.id !in previousIds && node.isActive }
         snapshot = value
+        nodesById = value.nodes.associateBy(FileNode::id)
+        val mutableEdgeKeysByNode = mutableMapOf<String, MutableSet<Pair<String, String>>>()
+        val mutableEdgeKeysByCallable = mutableMapOf<CallableRelation, MutableSet<Pair<String, String>>>()
+        for (edge in value.edges) {
+            val key = if (edge.sourceId <= edge.targetId) {
+                edge.sourceId to edge.targetId
+            } else {
+                edge.targetId to edge.sourceId
+            }
+            mutableEdgeKeysByNode.getOrPut(edge.sourceId, ::mutableSetOf) += key
+            mutableEdgeKeysByNode.getOrPut(edge.targetId, ::mutableSetOf) += key
+            for (callable in edge.callables) {
+                mutableEdgeKeysByCallable.getOrPut(callable, ::mutableSetOf) += key
+            }
+        }
+        edgeKeysByNode = mutableEdgeKeysByNode
+        edgeKeysByCallable = mutableEdgeKeysByCallable
+        hoveredCallable = null
+        hoveredEdgeKey = null
+        highlightedNodeIds = emptySet()
+        highlightedEdgeKeys = emptySet()
         val automatic = automaticLayout(value)
         val currentIds = value.nodes.mapTo(mutableSetOf()) { it.id }
         val structureChanged = previousSnapshot.nodes.mapTo(mutableSetOf()) { it.id } != currentIds ||
@@ -346,6 +398,7 @@ class GraphCanvas(
         snapshot = snapshot.copy(
             nodes = snapshot.nodes.map { node -> node.copy(isActive = node.id in paths) },
         )
+        nodesById = snapshot.nodes.associateBy(FileNode::id)
         repaint()
     }
 
@@ -409,7 +462,6 @@ class GraphCanvas(
     }
 
     private fun drawEdges(g: Graphics2D, metrics: FontMetrics) {
-        val nodesById = snapshot.nodes.associateBy(FileNode::id)
         val visualEdges = snapshot.edges.groupBy { edge ->
             if (edge.sourceId <= edge.targetId) {
                 edge.sourceId to edge.targetId
@@ -439,6 +491,7 @@ class GraphCanvas(
                 downward = downward,
                 bidirectional = bidirectional,
                 interfaceDispatch = callables.any(CallableRelation::isInterfaceDispatch),
+                callbackArgument = callables.any(CallableRelation::isCallbackArgument),
                 testRelation = pairedEdges.any { edge ->
                     nodesById[edge.sourceId]?.isTest == true || nodesById[edge.targetId]?.isTest == true
                 },
@@ -452,20 +505,20 @@ class GraphCanvas(
         edgeCurves += visualEdges.map { edge -> edge.curve to edge.key }
 
         for (edge in visualEdges) {
-            val highlighted = edge.key == hoveredEdgeKey ||
-                edge.callables.any { callable -> callable == hoveredCallable }
+            val highlighted = edge.key in highlightedEdgeKeys
             g.color = when {
                 edge.testRelation -> TEST_EDGE
                 edge.interfaceDispatch -> INTERFACE_EDGE
+                edge.callbackArgument -> CALLBACK_EDGE
                 else -> DIRECT_EDGE
             }
-            g.stroke = if (edge.interfaceDispatch) {
+            g.stroke = if (edge.interfaceDispatch || edge.callbackArgument) {
                 BasicStroke(
                     if (highlighted) 2.2f else 1.4f,
                     BasicStroke.CAP_ROUND,
                     BasicStroke.JOIN_ROUND,
                     10f,
-                    floatArrayOf(6f, 5f),
+                    if (edge.interfaceDispatch) floatArrayOf(6f, 5f) else floatArrayOf(2f, 5f),
                     0f,
                 )
             } else {
@@ -476,27 +529,27 @@ class GraphCanvas(
             if (edge.bidirectional) drawArrowHead(g, edge.source, !edge.downward)
         }
 
-        if (!showLabels) return
-        val labelEdges = visualEdges.filterNot(VisualEdge::testRelation).sortedWith(
-            compareByDescending<VisualEdge> { edge ->
-                edge.key == hoveredEdgeKey || edge.callables.any { callable -> callable == hoveredCallable }
-            }.thenByDescending(VisualEdge::activeRelation)
-                .thenByDescending { edge -> edge.callables.size }
-                .thenByDescending(VisualEdge::interfaceDispatch)
-                .thenBy(VisualEdge::order),
-        )
+        if (!showLabels || isLargeGraph && (animationTimer.isRunning || detailRestoreTimer.isRunning)) return
+        val labelEdges = visualEdges
+            .filter { edge -> !edge.testRelation && edge.callables.isNotEmpty() }
+            .sortedWith(
+                compareByDescending<VisualEdge> { edge ->
+                    edge.key in highlightedEdgeKeys
+                }.thenByDescending(VisualEdge::activeRelation)
+                    .thenByDescending { edge -> edge.callables.size }
+                    .thenByDescending(VisualEdge::interfaceDispatch)
+                    .thenByDescending(VisualEdge::callbackArgument)
+                    .thenBy(VisualEdge::order),
+            )
         for (edge in labelEdges) {
             val plannedGroup = planCallableLabels(
                 metrics = metrics,
                 callables = edge.callables,
                 curve = edge.curve,
-                foreignCurves = visualEdges.asSequence().filter { candidate -> candidate !== edge }
-                    .map(VisualEdge::curve).toList(),
             )
             if (plannedGroup != null) {
                 val plannedLabels = plannedGroup.labels
-                val highlighted = edge.key == hoveredEdgeKey ||
-                    edge.callables.any { callable -> callable == hoveredCallable }
+                val highlighted = edge.key in highlightedEdgeKeys
                 val groupBounds = Rectangle2D.Double(
                     plannedLabels.minOf { label -> label.bounds.minX },
                     plannedLabels.minOf { label -> label.bounds.minY },
@@ -509,7 +562,11 @@ class GraphCanvas(
                 if (!groupBounds.contains(anchor)) {
                     val connectionX = anchor.x.coerceIn(groupBounds.minX, groupBounds.maxX)
                     val connectionY = anchor.y.coerceIn(groupBounds.minY, groupBounds.maxY)
-                    g.color = if (edge.interfaceDispatch) INTERFACE_EDGE else DIRECT_EDGE
+                    g.color = when {
+                        edge.interfaceDispatch -> INTERFACE_EDGE
+                        edge.callbackArgument -> CALLBACK_EDGE
+                        else -> DIRECT_EDGE
+                    }
                     g.stroke = BasicStroke(if (highlighted) 1.8f else 1.0f)
                     g.draw(Line2D.Double(anchor.x, anchor.y, connectionX, connectionY))
                     g.fill(Ellipse2D.Double(anchor.x - 2.0, anchor.y - 2.0, 4.0, 4.0))
@@ -539,9 +596,8 @@ class GraphCanvas(
         metrics: FontMetrics,
         callables: List<CallableRelation>,
         curve: CubicCurve2D.Double,
-        foreignCurves: List<CubicCurve2D.Double>,
     ): PlannedLabelGroup? {
-        if (callables.isEmpty()) return PlannedLabelGroup(emptyList(), pointOnCurve(curve, 0.5))
+        if (callables.isEmpty()) return null
         val normalHeight = metrics.height + 6.0
         val minimumHeight = JBUI.scale(12).toDouble()
         val nodeGap = JBUI.scale(3).toDouble()
@@ -619,10 +675,7 @@ class GraphCanvas(
                                 groupBounds.width + nodeGap * 2,
                                 groupBounds.height + nodeGap * 2,
                             )
-                            if (
-                                labelGroupBounds.none(protectedGroupBounds::intersects) &&
-                                foreignCurves.none { foreignCurve -> foreignCurve.intersects(protectedGroupBounds) }
-                            ) {
+                            if (labelGroupBounds.none(protectedGroupBounds::intersects)) {
                                 return PlannedLabelGroup(group, anchor)
                             }
                         }
@@ -644,9 +697,17 @@ class GraphCanvas(
         val previousFont = g.font
         g.font = label.font
         val metrics = g.fontMetrics
-        g.color = if (callable.isInterfaceDispatch) INTERFACE_LABEL_BACKGROUND else LABEL_BACKGROUND
+        g.color = when {
+            callable.isInterfaceDispatch -> INTERFACE_LABEL_BACKGROUND
+            callable.isCallbackArgument -> CALLBACK_LABEL_BACKGROUND
+            else -> LABEL_BACKGROUND
+        }
         g.fillRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 12, 12)
-        g.color = if (callable.isInterfaceDispatch) INTERFACE_EDGE else DIRECT_LABEL_TEXT
+        g.color = when {
+            callable.isInterfaceDispatch -> INTERFACE_EDGE
+            callable.isCallbackArgument -> CALLBACK_EDGE
+            else -> DIRECT_LABEL_TEXT
+        }
         g.stroke = BasicStroke(if (highlighted) 1.8f else 1.0f)
         g.drawRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 12, 12)
         g.drawString(
@@ -673,14 +734,40 @@ class GraphCanvas(
 
     private fun drawNode(g: Graphics2D, metrics: FontMetrics, node: FileNode) {
         val bounds = nodeBounds[node.id] ?: return
+        if (node.isPlaceholder) {
+            g.color = PLACEHOLDER_BACKGROUND
+            g.fillRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
+            g.color = PLACEHOLDER_BORDER
+            g.stroke = BasicStroke(
+                1.2f,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND,
+                10f,
+                floatArrayOf(5f, 4f),
+                0f,
+            )
+            g.drawRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
+            g.color = PLACEHOLDER_TEXT
+            g.drawString(
+                node.title,
+                (bounds.x + 10).toFloat(),
+                (bounds.y + (bounds.height - metrics.height) / 2 + metrics.ascent).toFloat(),
+            )
+            return
+        }
+        val highlighted = node.id in highlightedNodeIds
         g.color = when {
             node.isTest -> TEST_NODE_BACKGROUND
             node.isActive -> ACTIVE_NODE_BACKGROUND
             else -> NODE_BACKGROUND
         }
         g.fillRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
-        g.color = if (node.isActive) ACTIVE_NODE_BORDER else NODE_BORDER
-        g.stroke = BasicStroke(if (node.isActive) 1.8f else 1.0f)
+        g.color = when {
+            highlighted -> HOVER_NODE_BORDER
+            node.isActive -> ACTIVE_NODE_BORDER
+            else -> NODE_BORDER
+        }
+        g.stroke = BasicStroke(if (highlighted) 2.2f else if (node.isActive) 1.8f else 1.0f)
         g.drawRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
 
         val icon = if (node.isTest) GoIcons.TEST_RUN else node.file.fileType.icon
@@ -696,7 +783,8 @@ class GraphCanvas(
     }
 
     private fun nodeSize(node: FileNode, metrics: FontMetrics): Dimension {
-        val width = max(JBUI.scale(132), metrics.stringWidth(node.title) + JBUI.scale(52))
+        val horizontalPadding = if (node.isPlaceholder) JBUI.scale(20) else JBUI.scale(52)
+        val width = max(JBUI.scale(132), metrics.stringWidth(node.title) + horizontalPadding)
         return Dimension(width, JBUI.scale(36))
     }
 
@@ -757,6 +845,16 @@ class GraphCanvas(
         val world = screenToWorld(screenPoint)
         val tolerance = JBUI.scale(6).toDouble() / scale
         for ((curve, key) in edgeCurves.asReversed()) {
+            val bounds = curve.bounds2D
+            if (!Rectangle2D.Double(
+                    bounds.x - tolerance,
+                    bounds.y - tolerance,
+                    bounds.width + tolerance * 2,
+                    bounds.height + tolerance * 2,
+                ).contains(world)
+            ) {
+                continue
+            }
             val iterator = curve.getPathIterator(null, 1.0)
             val coordinates = DoubleArray(6)
             var previousX = 0.0
@@ -794,7 +892,7 @@ class GraphCanvas(
     private fun nodeAt(screenPoint: Point): FileNode? {
         val world = screenToWorld(screenPoint)
         val id = nodeBounds.entries.firstOrNull { it.value.contains(world) }?.key ?: return null
-        return snapshot.nodes.firstOrNull { it.id == id }
+        return nodesById[id]
     }
 
     private fun screenToWorld(point: Point): Point2D.Double = Point2D.Double(
@@ -819,6 +917,9 @@ class GraphCanvas(
         if (!animationTimer.isRunning) animationTimer.start()
     }
 
+    private val isLargeGraph: Boolean
+        get() = snapshot.nodes.size > 36 || snapshot.edges.size > 72
+
     private data class PlannedCallableLabel(
         val bounds: Rectangle2D.Double,
         val callable: CallableRelation,
@@ -838,6 +939,7 @@ class GraphCanvas(
         val downward: Boolean,
         val bidirectional: Boolean,
         val interfaceDispatch: Boolean,
+        val callbackArgument: Boolean,
         val testRelation: Boolean,
         val activeRelation: Boolean,
         val order: Int,
@@ -851,12 +953,18 @@ class GraphCanvas(
         private val TEST_NODE_BACKGROUND = JBColor.namedColor("FileColor.Green", JBColor(0xE7F4E8, 0x29402F))
         private val NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeBorder", JBColor(0xB8BCC4, 0x5A5D63))
         private val ACTIVE_NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeActiveBorder", JBColor(0x3574F0, 0x548AF7))
+        private val HOVER_NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeHoverBorder", JBColor(0x6C707E, 0xFFFFFF))
         private val NODE_TEXT = JBColor.namedColor("GoFileRelationGraph.nodeText", JBColor(0x1F2329, 0xDFE1E5))
+        private val PLACEHOLDER_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.placeholder", JBColor(0xFFF8E4, 0x332E20))
+        private val PLACEHOLDER_BORDER = JBColor.namedColor("GoFileRelationGraph.placeholderBorder", JBColor(0xB48A38, 0xC99C48))
+        private val PLACEHOLDER_TEXT = JBColor.namedColor("GoFileRelationGraph.placeholderText", JBColor(0x75570F, 0xD6B35E))
         private val DIRECT_EDGE = JBColor.namedColor("GoFileRelationGraph.edge", JBColor(0x6C707E, 0x8B8D94))
         private val INTERFACE_EDGE = JBColor.namedColor("GoFileRelationGraph.interfaceEdge", JBColor(0x7A5AF8, 0xA78BFA))
+        private val CALLBACK_EDGE = JBColor.namedColor("GoFileRelationGraph.callbackEdge", JBColor(0x277D91, 0x62B8CA))
         private val TEST_EDGE = JBColor.namedColor("GoFileRelationGraph.testEdge", JBColor(0x4E9657, 0x6AAB73))
         private val LABEL_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.label", JBColor(0xF0F4FA, 0x25282E))
         private val INTERFACE_LABEL_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.interfaceLabel", JBColor(0xF1EDFF, 0x302A42))
+        private val CALLBACK_LABEL_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.callbackLabel", JBColor(0xE7F5F8, 0x20343A))
         private val DIRECT_LABEL_TEXT = JBColor.namedColor("GoFileRelationGraph.labelText", JBColor(0x315F9B, 0x9CC2FF))
     }
 }

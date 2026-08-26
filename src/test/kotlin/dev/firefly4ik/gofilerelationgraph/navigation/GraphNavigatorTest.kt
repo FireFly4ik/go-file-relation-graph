@@ -6,6 +6,8 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import dev.firefly4ik.gofilerelationgraph.model.CallSite
 import dev.firefly4ik.gofilerelationgraph.model.CallableRelation
+import dev.firefly4ik.gofilerelationgraph.model.FileNavigationTarget
+import dev.firefly4ik.gofilerelationgraph.model.FileNode
 import java.awt.Point
 import javax.swing.JPanel
 
@@ -77,6 +79,28 @@ class GraphNavigatorTest : BasePlatformTestCase() {
 
         assertEquals("current.go", manager.selectedFiles.single().name)
         UIUtil.dispatchAllInvocationEvents()
+        assertEquals(source.virtualFile, manager.selectedFiles.single())
+        assertEquals(offset, manager.selectedTextEditor?.caretModel?.offset)
+    }
+
+    fun testNodeWithSingleFunctionNavigatesToThatFunction() {
+        val source = myFixture.addFileToProject("source.go", "package main\n\nfunc Source() {}")
+        myFixture.configureByText("current.go", "package main\n\nfunc current() {}")
+        val offset = source.text.indexOf("Source")
+        val element = source.findElementAt(offset) ?: error("function element was not created")
+        val pointer = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(element)
+        val node = FileNode(
+            id = source.virtualFile.path,
+            title = source.name,
+            file = source.virtualFile,
+            isActive = false,
+            navigationTargets = listOf(FileNavigationTarget("Source", 3, pointer)),
+        )
+
+        GraphNavigator(project).openNode(node, JPanel(), Point())
+        UIUtil.dispatchAllInvocationEvents()
+
+        val manager = FileEditorManager.getInstance(project)
         assertEquals(source.virtualFile, manager.selectedFiles.single())
         assertEquals(offset, manager.selectedTextEditor?.caretModel?.offset)
     }
