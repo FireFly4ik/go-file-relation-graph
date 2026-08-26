@@ -758,11 +758,15 @@ class GraphCanvas(
         val highlighted = node.id in highlightedNodeIds
         g.color = when {
             node.isTest -> TEST_NODE_BACKGROUND
-            node.isActive || highlighted -> ACTIVE_NODE_BACKGROUND
+            node.isActive -> ACTIVE_NODE_BACKGROUND
             else -> NODE_BACKGROUND
         }
         g.fillRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
-        g.color = if (node.isActive || highlighted) ACTIVE_NODE_BORDER else NODE_BORDER
+        g.color = when {
+            highlighted -> HOVER_NODE_BORDER
+            node.isActive -> ACTIVE_NODE_BORDER
+            else -> NODE_BORDER
+        }
         g.stroke = BasicStroke(if (highlighted) 2.2f else if (node.isActive) 1.8f else 1.0f)
         g.drawRoundRect(bounds.x.toInt(), bounds.y.toInt(), bounds.width.toInt(), bounds.height.toInt(), 8, 8)
 
@@ -949,6 +953,7 @@ class GraphCanvas(
         private val TEST_NODE_BACKGROUND = JBColor.namedColor("FileColor.Green", JBColor(0xE7F4E8, 0x29402F))
         private val NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeBorder", JBColor(0xB8BCC4, 0x5A5D63))
         private val ACTIVE_NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeActiveBorder", JBColor(0x3574F0, 0x548AF7))
+        private val HOVER_NODE_BORDER = JBColor.namedColor("GoFileRelationGraph.nodeHoverBorder", JBColor(0x6C707E, 0xFFFFFF))
         private val NODE_TEXT = JBColor.namedColor("GoFileRelationGraph.nodeText", JBColor(0x1F2329, 0xDFE1E5))
         private val PLACEHOLDER_BACKGROUND = JBColor.namedColor("GoFileRelationGraph.placeholder", JBColor(0xFFF8E4, 0x332E20))
         private val PLACEHOLDER_BORDER = JBColor.namedColor("GoFileRelationGraph.placeholderBorder", JBColor(0xB48A38, 0xC99C48))
