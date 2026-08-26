@@ -33,6 +33,8 @@ editor context menu. A new closable `Parents: …` tab is added next to the perm
   levels including the selected function. Change `Max parent files` in a parent tab when a larger
   snapshot is needed.
 - Reaching a limit adds a `More parents not shown` tile and shows a notification.
+- A fully searched terminal file gets a `Possible parents may exist` tile because static usage search
+  cannot prove that reflection, registration, or other indirect entry points do not exist.
 - Cycles are not drawn in the current version.
 - Click a file tile to open its only participating function, or choose a function when the file contains several.
 - Parent tabs are snapshots. Use **Refresh Parent Graph** to rebuild one; tabs are not restored after restart.

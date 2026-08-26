@@ -63,10 +63,12 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
         assertEquals(RelationKind.CALLBACK_ARGUMENT, callbackEdge.callables.single().kind)
         assertEquals("(*Handler).Create()", callbackEdge.callables.single().label)
         assertTrue(result.snapshot.edges.any { edge -> edge.sourceId.endsWith("root.go") && edge.targetId.endsWith("middle.go") })
-        val levels = result.snapshot.nodes.associate { node -> node.file.name to node.layoutLevel }
-        assertEquals(0, levels.getValue("root.go"))
-        assertEquals(1, levels.getValue("middle.go"))
-        assertEquals(2, levels.getValue("target.go"))
+        val levels = result.snapshot.nodes.filterNot { node -> node.isPlaceholder }
+            .associate { node -> node.file.name to node.layoutLevel }
+        assertEquals(1, levels.getValue("root.go"))
+        assertEquals(2, levels.getValue("middle.go"))
+        assertEquals(3, levels.getValue("target.go"))
+        assertTrue(result.snapshot.nodes.any { node -> node.title == "Possible parents may exist" })
         assertFalse(result.fileLimitReached)
         assertFalse(result.depthLimitReached)
     }
@@ -105,7 +107,7 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
             ParentGraphAnalyzer(project).analyze(anchor, includeTests = false)
         }
 
-        val relation = result.snapshot.edges.single().callables.single()
+        val relation = result.snapshot.edges.single { edge -> edge.callables.isNotEmpty() }.callables.single()
         assertEquals(RelationKind.INTERFACE, relation.kind)
         assertEquals("(*BookingGateway).Search()", relation.label)
         assertTrue(relation.parentInterface?.element != null)
@@ -162,8 +164,8 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
             ParentGraphAnalyzer(project).analyze(anchor, includeTests = false)
         }
 
-        assertEquals(1, result.snapshot.edges.size)
-        assertEquals("second.go", result.snapshot.nodes.single { !it.isActive }.file.name)
+        assertEquals(1, result.snapshot.edges.count { edge -> edge.callables.isNotEmpty() })
+        assertEquals("second.go", result.snapshot.nodes.single { !it.isActive && !it.isPlaceholder }.file.name)
     }
 
     fun testIncludesTestParentsOnlyWhenEnabled() {
@@ -181,7 +183,7 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
             ParentGraphAnalyzer(project).analyze(anchor, includeTests = true)
         }
 
-        assertEquals(1, withoutTests.snapshot.nodes.size)
+        assertEquals(1, withoutTests.snapshot.nodes.count { node -> !node.isPlaceholder })
         assertEquals(setOf("target.go", "target_test.go"), withTests.snapshot.nodes.mapTo(mutableSetOf()) { it.file.name })
     }
 
@@ -205,7 +207,8 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
             ParentGraphAnalyzer(project).analyze(anchor, includeTests = true)
         }
 
-        assertEquals(listOf("target.go"), result.snapshot.nodes.map { it.file.name })
+        assertEquals(listOf("target.go"), result.snapshot.nodes.filterNot { it.isPlaceholder }.map { it.file.name })
+        assertTrue(result.snapshot.nodes.any { node -> node.title == "Possible parents may exist" })
     }
 
     fun testUsesNearestGoModule() {
@@ -234,8 +237,8 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
             ParentGraphAnalyzer(project).analyze(anchor, includeTests = true)
         }
 
-        assertEquals(listOf("target.go"), result.snapshot.nodes.map { it.file.name })
-        assertTrue(result.snapshot.edges.isEmpty())
+        assertEquals(listOf("target.go"), result.snapshot.nodes.filterNot { it.isPlaceholder }.map { it.file.name })
+        assertTrue(result.snapshot.edges.none { edge -> edge.callables.isNotEmpty() })
     }
 
     fun testDoesNotTreatPlainFunctionAssignmentAsCallbackArgument() {
@@ -253,7 +256,7 @@ class ParentGraphAnalyzerTest : BasePlatformTestCase() {
             ParentGraphAnalyzer(project).analyze(anchor, includeTests = false)
         }
 
-        assertTrue(result.snapshot.edges.isEmpty())
-        assertEquals(listOf("target.go"), result.snapshot.nodes.map { it.file.name })
+        assertTrue(result.snapshot.edges.none { edge -> edge.callables.isNotEmpty() })
+        assertEquals(listOf("target.go"), result.snapshot.nodes.filterNot { it.isPlaceholder }.map { it.file.name })
     }
 }

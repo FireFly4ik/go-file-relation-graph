@@ -89,7 +89,7 @@ class ParentGraphPanel(
         loadingPanel.stopLoading()
         canvas.setSnapshot(result.snapshot)
         val notificationGroup = NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
-        if (result.snapshot.edges.isEmpty()) {
+        if (result.snapshot.edges.none { edge -> edge.callables.isNotEmpty() }) {
             notificationGroup.createNotification(
                 "No project parents found",
                 "The function may only be called by a library, generated code, reflection, or another Go module.",
@@ -128,6 +128,7 @@ class ParentGraphPanel(
 
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         })
+        actions.add(Separator.getInstance())
         actions.add(object : ToggleAction("Show Labels", "Show function and method names on relations", AllIcons.Nodes.Tag) {
             override fun isSelected(event: AnActionEvent) = canvas.showLabels
 

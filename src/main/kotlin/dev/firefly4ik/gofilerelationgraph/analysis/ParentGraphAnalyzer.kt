@@ -200,10 +200,20 @@ class ParentGraphAnalyzer(
                 )
             }
             .sortedWith(compareBy(FileEdge::sourceId, FileEdge::order, FileEdge::targetId))
+        val incompletelyAnalyzedPaths = enqueued.asSequence()
+            .filterNot(visited::contains)
+            .mapTo(mutableSetOf(), DeclarationKey::path)
+        val possibleParentTargets = nodes.keys - edges.mapTo(mutableSetOf(), FileEdge::targetId) -
+            truncatedTargets - incompletelyAnalyzedPaths
         val truncatedDistances = truncatedTargets.associateWith { targetPath ->
             (fileDistances[targetPath] ?: 0) + 1
         }
-        val maximumDistance = (fileDistances.values + truncatedDistances.values).maxOrNull() ?: 0
+        val possibleParentDistances = possibleParentTargets.associateWith { targetPath ->
+            (fileDistances[targetPath] ?: 0) + 1
+        }
+        val maximumDistance = (
+            fileDistances.values + truncatedDistances.values + possibleParentDistances.values
+        ).maxOrNull() ?: 0
         val titles = FileTitleDisambiguator.disambiguate(nodes.keys.toList(), project.basePath)
         val visibleNodes = nodes.values.map { node ->
             node.copy(
@@ -223,6 +233,23 @@ class ParentGraphAnalyzer(
                 isActive = false,
                 isPlaceholder = true,
                 layoutLevel = maximumDistance - truncatedDistances.getValue(targetPath),
+            )
+            visibleEdges += FileEdge(
+                sourceId = placeholderId,
+                targetId = targetPath,
+                callables = emptyList(),
+            )
+        }
+        for (targetPath in possibleParentTargets) {
+            val targetNode = nodes[targetPath] ?: continue
+            val placeholderId = "possible-parents:$targetPath"
+            visibleNodes += FileNode(
+                id = placeholderId,
+                title = "Possible parents may exist",
+                file = targetNode.file,
+                isActive = false,
+                isPlaceholder = true,
+                layoutLevel = maximumDistance - possibleParentDistances.getValue(targetPath),
             )
             visibleEdges += FileEdge(
                 sourceId = placeholderId,
