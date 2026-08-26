@@ -200,6 +200,60 @@ class GraphLayoutEngineTest {
     }
 
     @Test
+    fun `single chain stays aligned when neighboring branch is wider`() {
+        val levels = mapOf(
+            "left-top.go" to 0,
+            "chain-top.go" to 0,
+            "left-middle-first.go" to 1,
+            "left-middle-second.go" to 1,
+            "chain-middle.go" to 1,
+            "left-bottom.go" to 2,
+            "chain-bottom.go" to 2,
+        )
+        val snapshot = GraphSnapshot(
+            nodes = levels.map { (id, level) ->
+                FileNode(id, id, LightVirtualFile(id), false, layoutLevel = level)
+            },
+            edges = listOf(
+                FileEdge("left-top.go", "left-middle-first.go", emptyList()),
+                FileEdge("left-top.go", "left-middle-second.go", emptyList()),
+                FileEdge("left-middle-first.go", "left-bottom.go", emptyList()),
+                FileEdge("left-middle-second.go", "left-bottom.go", emptyList()),
+                FileEdge("chain-top.go", "chain-middle.go", emptyList()),
+                FileEdge("chain-middle.go", "chain-bottom.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+        val chainCenter = (
+            positions.getValue("chain-top.go").x + positions.getValue("chain-bottom.go").x
+            ) / 2.0
+
+        assertTrue(kotlin.math.abs(positions.getValue("chain-middle.go").x - chainCenter) <= 40.0)
+    }
+
+    @Test
+    fun `intermediate file leaves a corridor for a direct long relation`() {
+        val snapshot = GraphSnapshot(
+            nodes = listOf(
+                FileNode("source.go", "source.go", LightVirtualFile("source.go"), false, layoutLevel = 0),
+                FileNode("middle.go", "middle.go", LightVirtualFile("middle.go"), false, layoutLevel = 1),
+                FileNode("target.go", "target.go", LightVirtualFile("target.go"), false, layoutLevel = 2),
+            ),
+            edges = listOf(
+                FileEdge("source.go", "target.go", emptyList()),
+                FileEdge("source.go", "middle.go", emptyList()),
+                FileEdge("middle.go", "target.go", emptyList()),
+            ),
+        )
+
+        val positions = GraphLayoutEngine.layout(snapshot)
+        val directCorridorX = (positions.getValue("source.go").x + positions.getValue("target.go").x) / 2.0
+
+        assertTrue(kotlin.math.abs(positions.getValue("middle.go").x - directCorridorX) >= 80.0)
+    }
+
+    @Test
     fun `independent branches with different depth stay visually separated`() {
         val ids = listOf("apply.go", "handler.go", "promocode.go", "pricing.go", "deep.go")
         val snapshot = GraphSnapshot(

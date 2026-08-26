@@ -395,6 +395,9 @@ object GraphLayoutEngine {
                 }
                 ?: 0.0
         }
+        val slotWidths = nodeIds.associateWith { id ->
+            maxOf(sizes.getValue(id).width.toDouble(), labelFootprints.getValue(id))
+        }
         val result = mutableMapOf<String, Point2D.Double>()
         val visualEdgeGroups = snapshot.edges.groupBy { edge ->
             if (edge.sourceId <= edge.targetId) {
@@ -433,9 +436,6 @@ object GraphLayoutEngine {
                 depth += previousHeight + maxOf(MIN_LEVEL_GAP, requiredGap) + 4.0
             }
             previousHeight = ids.maxOf { id -> sizes.getValue(id).height }.toDouble()
-            val slotWidths = ids.associateWith { id ->
-                maxOf(sizes.getValue(id).width.toDouble(), labelFootprints.getValue(id))
-            }
             val totalWidth = ids.sumOf(slotWidths::getValue) +
                 CROSS_GAP * (ids.size - 1).coerceAtLeast(0)
             var cursor = -totalWidth / 2.0
@@ -445,6 +445,75 @@ object GraphLayoutEngine {
                 cursor += width + CROSS_GAP
             }
             previousLevel = level
+        }
+
+        val alignLevel = { ids: List<String>, desiredCenters: Map<String, Double> ->
+            val alignedCenters = mutableMapOf<String, Double>()
+            var previousId: String? = null
+            for (id in ids) {
+                val predecessor = previousId
+                val desired = desiredCenters.getValue(id)
+                val center = if (predecessor == null) {
+                    desired
+                } else {
+                    val minimum = alignedCenters.getValue(predecessor) +
+                        (slotWidths.getValue(predecessor) + slotWidths.getValue(id)) / 2.0 + CROSS_GAP
+                    maxOf(minimum, minOf(desired, minimum + MAX_EXTRA_CROSS_GAP))
+                }
+                alignedCenters[id] = center
+                previousId = id
+            }
+            val correction = ids.map { id ->
+                desiredCenters.getValue(id) - alignedCenters.getValue(id)
+            }.average()
+            for (id in ids) result.getValue(id).x = alignedCenters.getValue(id) + correction
+        }
+        repeat(COORDINATE_PASSES) { pass ->
+            val levelsToAlign = if (pass % 2 == 0) byLevel.values else byLevel.values.reversed()
+            for (ids in levelsToAlign) {
+                alignLevel(ids, ids.associateWith { id ->
+                    val allNeighbors = if (pass % 2 == 0) {
+                        forwardIncoming.getValue(id)
+                    } else {
+                        forwardOutgoing.getValue(id)
+                    }
+                    val preferredNeighbors = if (testById[id] == false) {
+                        allNeighbors.filter { neighbor -> testById[neighbor] == false }.ifEmpty { allNeighbors }
+                    } else {
+                        allNeighbors
+                    }
+                    preferredNeighbors.map { neighbor -> result.getValue(neighbor).x }
+                        .average().takeUnless(Double::isNaN)
+                        ?: result.getValue(id).x
+                })
+            }
+        }
+        repeat(CORRIDOR_PASSES) {
+            for ((level, ids) in byLevel) {
+                val corridors = forwardEdges.mapNotNull { edge ->
+                    val sourceLevel = levels.getValue(edge.sourceId)
+                    val targetLevel = levels.getValue(edge.targetId)
+                    if (level !in sourceLevel + 1 until targetLevel) return@mapNotNull null
+                    val levelRatio = (level - sourceLevel).toDouble() / (targetLevel - sourceLevel)
+                    val sourceX = result.getValue(edge.sourceId).x
+                    val targetX = result.getValue(edge.targetId).x
+                    sourceX + (targetX - sourceX) * levelRatio
+                }
+                if (corridors.isEmpty()) continue
+                alignLevel(ids, ids.withIndex().associate { (index, id) ->
+                    var desired = result.getValue(id).x
+                    val clearance = slotWidths.getValue(id) / 2.0 + EDGE_CORRIDOR_GAP
+                    for (corridor in corridors) {
+                        if (kotlin.math.abs(desired - corridor) >= clearance) continue
+                        desired = if (desired < corridor || desired == corridor && index < ids.size / 2) {
+                            corridor - clearance
+                        } else {
+                            corridor + clearance
+                        }
+                    }
+                    id to desired
+                })
+            }
         }
         return result
     }
@@ -460,4 +529,8 @@ object GraphLayoutEngine {
     private const val MAX_OPTIMIZED_EDGES = 72
     private const val MAX_EXPLICIT_LEVEL_WIDTH = 10
     private const val BARYCENTER_PASSES = 4
+    private const val COORDINATE_PASSES = 8
+    private const val CORRIDOR_PASSES = 2
+    private const val MAX_EXTRA_CROSS_GAP = 72.0
+    private const val EDGE_CORRIDOR_GAP = 14.0
 }
