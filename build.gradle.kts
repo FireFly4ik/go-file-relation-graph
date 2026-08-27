@@ -43,18 +43,25 @@ intellijPlatform {
         version = providers.gradleProperty("pluginVersion")
 
         ideaVersion {
-            sinceBuild = "261"
+            sinceBuild = "243"
         }
     }
 
     pluginVerification {
         ides {
             create(IntelliJPlatformType.GoLand, providers.gradleProperty("platformVersion"))
+            create(IntelliJPlatformType.GoLand, providers.gradleProperty("verificationPlatformVersion"))
         }
     }
 }
 
 tasks {
+    processResources {
+        from(rootProject.file("LICENSE")) {
+            into("META-INF")
+        }
+    }
+
     test {
         useJUnitPlatform()
     }

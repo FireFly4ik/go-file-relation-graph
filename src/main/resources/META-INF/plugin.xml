@@ -1,7 +1,7 @@
-<idea-plugin>
+<idea-plugin url="https://github.com/FireFly4ik/go-file-relation-graph">
     <id>dev.firefly4ik.go-file-relation-graph</id>
     <name>Go File Relation Graph</name>
-    <vendor>firefly4ik</vendor>
+    <vendor url="https://github.com/FireFly4ik" email="vag-06@mail.ru">FireFly4ik</vendor>
     <category>Code tools</category>
 
     <description><![CDATA[
@@ -47,17 +47,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>1.0.2</h3>
-        <ul>
-            <li>Lock files inside shared-output groups and move the complete group from a file or its frame.</li>
-            <li>Preserve parent-graph breadth-first hierarchy when wide levels are split into several rows.</li>
-            <li>Keep grouped members ordered by their individual incoming sources to reduce crossings.</li>
-        </ul>
         <h3>1.0.1</h3>
         <ul>
+            <li>Add compatibility with GoLand 2024.3.3 and newer IDE builds.</li>
             <li>Group files on the same level when their outgoing relations are identical.</li>
             <li>Keep incoming arrows attached to each concrete file while sharing repeated outgoing arrows and labels.</li>
             <li>Support shared-output groups in both the live open-files graph and parent-call graphs.</li>
+            <li>Lock files inside shared-output groups and move the complete group from a file or its frame.</li>
+            <li>Preserve parent-graph breadth-first hierarchy when wide levels are split into several rows.</li>
+            <li>Keep grouped members ordered by their individual incoming sources to reduce crossings.</li>
             <li>Highlight all grouped sources and their target when hovering a shared relation.</li>
         </ul>
         <h3>1.0.0</h3>
