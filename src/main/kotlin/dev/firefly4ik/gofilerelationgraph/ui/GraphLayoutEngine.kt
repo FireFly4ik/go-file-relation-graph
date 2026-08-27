@@ -131,8 +131,8 @@ object GraphLayoutEngine {
                 outgoing.getValue(edge.sourceId) += edge.targetId
                 incoming.getValue(edge.targetId) += edge.sourceId
             }
-            weights[edge.sourceId to edge.targetId] = edge.callables.sumOf { callable ->
-                if (callable.isInterfaceDispatch || callable.isCallbackArgument) 1 else 4
+            weights[edge.sourceId to edge.targetId] = edge.callables.fold(0) { total, callable ->
+                total + if (callable.isInterfaceDispatch || callable.isCallbackArgument) 1 else 4
             }.coerceAtLeast(1)
         }
 
