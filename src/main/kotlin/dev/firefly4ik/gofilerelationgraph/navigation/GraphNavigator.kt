@@ -30,7 +30,11 @@ class GraphNavigator(
         openInCurrentEditor(file, 0)
     }
 
-    fun openNode(node: FileNode, component: JComponent, point: Point) {
+    fun openNode(node: FileNode, component: JComponent, point: Point, chooseNavigationTarget: Boolean = true) {
+        if (!chooseNavigationTarget) {
+            openFile(node.file)
+            return
+        }
         when (node.navigationTargets.size) {
             0 -> openFile(node.file)
             1 -> navigateTo(node.navigationTargets.single().pointer)
@@ -47,11 +51,15 @@ class GraphNavigator(
     }
 
     fun openCallSites(callable: CallableRelation, component: JComponent, point: Point) {
-        val validSites = ApplicationManager.getApplication().runReadAction<List<CallSite>> {
-            callable.callSites.filter { it.pointer.element?.isValid == true }
+        val validSites = ApplicationManager.getApplication().runReadAction<List<Pair<CallSite, String>>> {
+            callable.callSites.mapNotNull { callSite ->
+                val element = callSite.pointer.element?.takeIf(PsiElement::isValid) ?: return@mapNotNull null
+                val fileName = callSite.fileTitle ?: element.containingFile?.virtualFile?.name ?: return@mapNotNull null
+                callSite to fileName
+            }
         }
         if (validSites.size == 1) {
-            navigateTo(validSites.single().pointer)
+            navigateTo(validSites.single().first.pointer)
             return
         }
         if (validSites.isEmpty()) return
@@ -59,22 +67,22 @@ class GraphNavigator(
         JBPopupFactory.getInstance()
             .createPopupChooserBuilder(validSites)
             .setTitle("${callable.label} call sites")
-            .setRenderer(ListCellRenderer<CallSite> { list, value, _, selected, _ ->
+            .setRenderer(ListCellRenderer<Pair<CallSite, String>> { list, value, _, selected, _ ->
                 val foreground = if (selected) list.selectionForeground else list.foreground
                 JPanel(BorderLayout(JBUI.scale(16), 0)).apply {
                     isOpaque = true
                     background = if (selected) list.selectionBackground else list.background
                     border = JBUI.Borders.empty(4, 8)
                     add(SimpleColoredComponent().apply {
-                        append(value.lineText, SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, foreground))
+                        append(value.first.lineText, SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, foreground))
                     }, BorderLayout.CENTER)
-                    add(JBLabel(value.lineNumber.toString()).apply {
+                    add(JBLabel("${value.second}:${value.first.lineNumber}").apply {
                         this.foreground = if (selected) list.selectionForeground else SimpleTextAttributes.GRAYED_ATTRIBUTES.fgColor
                         horizontalAlignment = JBLabel.RIGHT
                     }, BorderLayout.EAST)
                 }
             })
-            .setItemChosenCallback { navigateTo(it.pointer) }
+            .setItemChosenCallback { navigateTo(it.first.pointer) }
             .createPopup()
             .show(com.intellij.ui.awt.RelativePoint(component, point))
     }

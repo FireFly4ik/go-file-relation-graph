@@ -47,6 +47,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>1.0.2</h3>
+        <ul>
+            <li>Open parent-graph file tiles directly without asking which function to select.</li>
+            <li>Show the source file tile name and line number for grouped Shift-click call-site choices.</li>
+            <li>Keep parent graphs in a horizontally scrollable editor-style tab row with inline close buttons.</li>
+            <li>Allow parent graph tabs to shrink with the tool window instead of enforcing a wide minimum size.</li>
+            <li>Rename the permanent graph tab to Opened Files.</li>
+        </ul>
         <h3>1.0.1</h3>
         <ul>
             <li>Add compatibility with GoLand 2024.3.3 and newer IDE builds.</li>

@@ -26,6 +26,7 @@ import dev.firefly4ik.gofilerelationgraph.analysis.ParentGraphController
 import dev.firefly4ik.gofilerelationgraph.analysis.ParentGraphResult
 import dev.firefly4ik.gofilerelationgraph.navigation.GraphNavigator
 import java.awt.BorderLayout
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
@@ -34,9 +35,8 @@ import javax.swing.JPanel
 class ParentGraphPanel(
     private val project: Project,
     anchor: SmartPsiElementPointer<GoFunctionOrMethodDeclaration>,
-    private val close: () -> Unit,
 ) : JBPanel<ParentGraphPanel>(BorderLayout()), Disposable {
-    private val canvas = GraphCanvas(GraphNavigator(project))
+    private val canvas = GraphCanvas(GraphNavigator(project), chooseNodeNavigationTarget = false)
     private val loadingPanel = JBLoadingPanel(BorderLayout(), this).apply {
         add(canvas, BorderLayout.CENTER)
         setLoadingText("Searching project parents…")
@@ -62,6 +62,7 @@ class ParentGraphPanel(
     init {
         Disposer.register(this, controller)
         border = JBUI.Borders.empty()
+        minimumSize = Dimension(0, 0)
         add(createHeader(), BorderLayout.NORTH)
         add(loadingPanel, BorderLayout.CENTER)
     }
@@ -121,14 +122,6 @@ class ParentGraphPanel(
 
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         })
-        actions.add(object : AnAction("Close Parent Graph", "Close this parent graph tab", AllIcons.Actions.Close) {
-            override fun actionPerformed(event: AnActionEvent) {
-                close()
-            }
-
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        })
-        actions.add(Separator.getInstance())
         actions.add(object : ToggleAction("Show Labels", "Show function and method names on relations", AllIcons.Nodes.Tag) {
             override fun isSelected(event: AnActionEvent) = canvas.showLabels
 

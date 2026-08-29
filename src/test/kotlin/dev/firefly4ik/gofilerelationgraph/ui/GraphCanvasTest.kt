@@ -67,6 +67,10 @@ class GraphCanvasTest : BasePlatformTestCase() {
         val group = OutgoingRelationGroups.find(snapshot).single()
         assertEquals(listOf("source-a", "source-b"), group.memberIds)
         assertEquals(2, group.sharedRelations.single().callables.single().callSites.size)
+        assertEquals(
+            setOf("source_a.go", "source_b.go"),
+            group.sharedRelations.single().callables.single().callSites.mapNotNull(CallSite::fileTitle).toSet(),
+        )
 
         val automaticPositions = GraphLayoutEngine.layout(snapshot)
         assertEquals(automaticPositions.getValue("source-a").y, automaticPositions.getValue("source-b").y)

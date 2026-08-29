@@ -62,4 +62,5 @@ data class CallSite(
     val lineText: String,
     val pointer: SmartPsiElementPointer<out PsiElement>,
     val offset: Int = Int.MAX_VALUE,
+    val fileTitle: String? = null,
 )

@@ -40,6 +40,7 @@ import kotlin.math.min
 
 class GraphCanvas(
     private val navigator: GraphNavigator,
+    private val chooseNodeNavigationTarget: Boolean = true,
 ) : JComponent() {
     private var snapshot = GraphSnapshot.EMPTY
     private var nodesById = emptyMap<String, FileNode>()
@@ -177,7 +178,7 @@ class GraphCanvas(
                         callable != null && event.isShiftDown -> navigator.openCallSites(callable, this@GraphCanvas, event.point)
                         callable != null -> navigator.openTarget(callable)
                         else -> nodeAt(event.point)?.takeUnless(FileNode::isPlaceholder)?.let { node ->
-                            navigator.openNode(node, this@GraphCanvas, event.point)
+                            navigator.openNode(node, this@GraphCanvas, event.point, chooseNodeNavigationTarget)
                         }
                     }
                 }

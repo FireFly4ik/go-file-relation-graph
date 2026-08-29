@@ -75,10 +75,14 @@ internal object OutgoingRelationGroups {
                             val matching = sourceEdges.flatMap { edge ->
                                 edge.callables.filter { callable ->
                                     callable.label == signature.label && callable.kind == signature.kind
+                                }.flatMap { callable ->
+                                    callable.callSites.map { callSite ->
+                                        callSite.copy(fileTitle = nodesById.getValue(edge.sourceId).title)
+                                    }
                                 }
                             }
                             representativeCallables.first().copy(
-                                callSites = matching.flatMap(CallableRelation::callSites),
+                                callSites = matching,
                             )
                         }
                     SharedOutgoingRelation(

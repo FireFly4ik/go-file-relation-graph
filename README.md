@@ -6,7 +6,7 @@ method selected in the editor.
 
 ## Current behavior
 
-### Open Files
+### Opened Files
 
 - Nodes are open, non-generated Go files.
 - Solid relations are direct function or concrete-method calls.
@@ -19,7 +19,7 @@ method selected in the editor.
 - Files called earlier by the same parent are placed further left on their level.
 - Click a file tile to open the file.
 - Click a callable label to open its implementation.
-- Shift-click a callable label to open the call site, or choose one when there are several.
+- Shift-click a callable label to open the call site, or choose one by source file and line when there are several.
 - Right-click an interface-dispatched label to open the parent interface used by the call.
 - Drag a tile to reposition it and drag the canvas to pan. Use a mouse wheel or a macOS trackpad pinch to zoom.
 - Use View Options to control auto-refresh, include test files, or show files without relations.
@@ -28,7 +28,7 @@ method selected in the editor.
 
 Place the caret inside a named Go function or method and choose **Build Parent Graph** from the
 editor context menu. A new closable `Parents: …` tab is added next to the permanent
-`Open Files` tab.
+`Opened Files` tab.
 
 - The search walks possible callers breadth-first inside the nearest `go.mod`.
 - Direct calls, calls through interfaces, and functions or methods passed as call arguments are supported.
@@ -39,9 +39,10 @@ editor context menu. A new closable `Parents: …` tab is added next to the perm
 - Wide parent levels are split into consecutive rows without mixing files from different breadth-first levels.
 - Reaching a limit adds a `More parents not shown` tile and shows a notification.
 - Cycles are not drawn in the current version.
-- Click a file tile to open its only participating function, or choose a function when the file contains several.
+- Click a file tile to open the file directly. Use relation labels to navigate to concrete functions and methods.
 - Parent tabs are snapshots. Use **Refresh Parent Graph** to rebuild one; tabs are not restored after restart.
 - Parent snapshots use the same identical-outgoing-relation grouping as the open-files graph.
+- Parent tabs use one horizontally scrollable row. `Opened Files` remains first, and each parent tab closes from its inline close button.
 
 For example, passing a method as a callback produces a direct visible parent relation without a
 tile for the registration helper:

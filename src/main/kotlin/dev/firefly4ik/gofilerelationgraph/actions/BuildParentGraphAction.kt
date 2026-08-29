@@ -13,12 +13,9 @@ import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.SmartPointerManager
 import com.intellij.psi.util.PsiTreeUtil
-import com.intellij.ui.content.ContentFactory
-import com.intellij.ui.content.Content
 import dev.firefly4ik.gofilerelationgraph.analysis.ParentGraphAnalyzer
 import dev.firefly4ik.gofilerelationgraph.ui.GoFileRelationGraphToolWindowFactory
 import dev.firefly4ik.gofilerelationgraph.ui.ParentGraphPanel
-import dev.firefly4ik.gofilerelationgraph.ui.ParentGraphTabTitles
 
 class BuildParentGraphAction : AnAction() {
     override fun actionPerformed(event: AnActionEvent) {
@@ -45,19 +42,12 @@ class BuildParentGraphAction : AnAction() {
             .getToolWindow(GoFileRelationGraphToolWindowFactory.TOOL_WINDOW_ID)
             ?: return
         toolWindow.activate({
-            lateinit var content: Content
-            val panel = ParentGraphPanel(project, pointer) {
-                toolWindow.contentManager.removeContent(content, true)
-            }
             val symbolName = displayName(anchor)
-            content = ContentFactory.getInstance().createContent(panel, "Parents: $symbolName", true)
-            content.setDisposer(panel)
-            content.isCloseable = true
-            content.isPinnable = false
-            ParentGraphTabTitles.register(content, symbolName, anchor.containingFile.virtualFile.path)
-            toolWindow.contentManager.addContent(content)
-            toolWindow.contentManager.setSelectedContent(content, true)
-            panel.load()
+            GoFileRelationGraphToolWindowFactory.tabsPanel(toolWindow)?.addParentGraph(
+                anchor = pointer,
+                symbolName = symbolName,
+                filePath = anchor.containingFile.virtualFile.path,
+            )
         }, true)
     }
 

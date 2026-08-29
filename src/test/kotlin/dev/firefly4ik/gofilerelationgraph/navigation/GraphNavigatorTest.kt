@@ -104,4 +104,40 @@ class GraphNavigatorTest : BasePlatformTestCase() {
         assertEquals(source.virtualFile, manager.selectedFiles.single())
         assertEquals(offset, manager.selectedTextEditor?.caretModel?.offset)
     }
+
+    fun testParentNodeOpensFileWithoutFunctionChooserOrDeclarationJump() {
+        val source = myFixture.addFileToProject(
+            "main.go",
+            "package main\n\nfunc First() {}\n\nfunc Second() {}",
+        )
+        myFixture.configureByText("current.go", "package main\n\nfunc current() {}")
+        val pointerManager = SmartPointerManager.getInstance(project)
+        val firstOffset = source.text.indexOf("First")
+        val secondOffset = source.text.indexOf("Second")
+        val node = FileNode(
+            id = source.virtualFile.path,
+            title = source.name,
+            file = source.virtualFile,
+            isActive = false,
+            navigationTargets = listOf(
+                FileNavigationTarget(
+                    "First",
+                    3,
+                    pointerManager.createSmartPsiElementPointer(source.findElementAt(firstOffset)!!),
+                ),
+                FileNavigationTarget(
+                    "Second",
+                    5,
+                    pointerManager.createSmartPsiElementPointer(source.findElementAt(secondOffset)!!),
+                ),
+            ),
+        )
+
+        GraphNavigator(project).openNode(node, JPanel(), Point(), chooseNavigationTarget = false)
+        UIUtil.dispatchAllInvocationEvents()
+
+        val manager = FileEditorManager.getInstance(project)
+        assertEquals(source.virtualFile, manager.selectedFiles.single())
+        assertEquals(0, manager.selectedTextEditor?.caretModel?.offset)
+    }
 }
